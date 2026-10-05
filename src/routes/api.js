@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { shopService, logService } from '../services/db.js';
 import { scraperService, ScraperService } from '../services/scraper.js';
+import { jevService } from '../services/jev.js';
 
 const router = Router();
 
@@ -146,6 +147,55 @@ router.post('/seed', (req, res) => {
     res.json({ success: true, message: `Successfully seeded ${count} sample items across multiple shops!`, count });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/jev/config - get current Jev & proxy configuration status
+router.get('/jev/config', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      enabled: jevService.enabled,
+      hasKey: Boolean(jevService.apiKey),
+      maskedKey: jevService.apiKey ? `${jevService.apiKey.slice(0, 4)}...${jevService.apiKey.slice(-4)}` : '',
+      baseUrl: jevService.baseUrl,
+      model: jevService.model,
+      useProxy: jevService.useProxy,
+      proxyUrl: jevService.proxyUrl
+    }
+  });
+});
+
+// POST /api/jev/config - update Jev & proxy configuration
+router.post('/jev/config', (req, res) => {
+  try {
+    const { enabled, apiKey, baseUrl, model, useProxy, proxyUrl } = req.body;
+    jevService.updateConfig({ enabled, apiKey, baseUrl, model, useProxy, proxyUrl });
+    res.json({
+      success: true,
+      message: 'Jev 与代理配置已生效！',
+      data: {
+        enabled: jevService.enabled,
+        hasKey: Boolean(jevService.apiKey),
+        baseUrl: jevService.baseUrl,
+        model: jevService.model,
+        useProxy: jevService.useProxy,
+        proxyUrl: jevService.proxyUrl
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/jev/test - test connection to TypeSafe Jev System One API
+router.post('/jev/test', async (req, res) => {
+  try {
+    const { apiKey, baseUrl, proxyUrl, useProxy } = req.body || {};
+    const result = await jevService.testConnection({ apiKey, baseUrl, proxyUrl, useProxy });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, message: `Jev 连接异常: ${err.message}` });
   }
 });
 

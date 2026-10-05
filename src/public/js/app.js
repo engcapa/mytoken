@@ -36,6 +36,22 @@ const cfgWafCookie = document.getElementById('cfg-waf-cookie');
 const noticeBanner = document.getElementById('notice-banner');
 const noticeClose = document.getElementById('notice-close');
 
+// Jev & Proxy DOM Elements
+const tabBtnShops = document.getElementById('tab-btn-shops');
+const tabBtnJev = document.getElementById('tab-btn-jev');
+const tabContentShops = document.getElementById('tab-content-shops');
+const tabContentJev = document.getElementById('tab-content-jev');
+const cfgJevEnabled = document.getElementById('cfg-jev-enabled');
+const cfgJevKey = document.getElementById('cfg-jev-key');
+const cfgJevBaseUrl = document.getElementById('cfg-jev-base-url');
+const cfgJevModel = document.getElementById('cfg-jev-model');
+const cfgUseProxy = document.getElementById('cfg-use-proxy');
+const cfgProxyUrl = document.getElementById('cfg-proxy-url');
+const btnToggleKeyVis = document.getElementById('btn-toggle-key-vis');
+const btnTestJev = document.getElementById('btn-test-jev');
+const testJevText = document.getElementById('test-jev-text');
+const testJevResult = document.getElementById('test-jev-result');
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   restoreConfig();
@@ -101,25 +117,160 @@ function bindEvents() {
 
   // Notice close
   noticeClose.addEventListener('click', () => noticeBanner.classList.add('hidden'));
+
+  // Jev Settings Tabs
+  if (tabBtnShops && tabBtnJev) {
+    tabBtnShops.addEventListener('click', () => switchSettingsTab('shops'));
+    tabBtnJev.addEventListener('click', () => switchSettingsTab('jev'));
+  }
+
+  // Toggle API key visibility
+  if (btnToggleKeyVis && cfgJevKey) {
+    btnToggleKeyVis.addEventListener('click', () => {
+      if (cfgJevKey.type === 'password') {
+        cfgJevKey.type = 'text';
+        btnToggleKeyVis.textContent = '隐藏';
+      } else {
+        cfgJevKey.type = 'password';
+        btnToggleKeyVis.textContent = '显示';
+      }
+    });
+  }
+
+  // Test Jev connection button
+  if (btnTestJev) {
+    btnTestJev.addEventListener('click', handleTestJev);
+  }
+}
+
+// Switch modal tabs
+function switchSettingsTab(tabName) {
+  if (tabName === 'shops') {
+    tabBtnShops.className = 'tab-btn active px-4 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors';
+    tabBtnJev.className = 'tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors';
+    tabContentShops.classList.remove('hidden');
+    tabContentJev.classList.add('hidden');
+  } else {
+    tabBtnJev.className = 'tab-btn active px-4 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors';
+    tabBtnShops.className = 'tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors';
+    tabContentJev.classList.remove('hidden');
+    tabContentShops.classList.add('hidden');
+  }
 }
 
 // Restore saved settings
-function restoreConfig() {
+async function restoreConfig() {
   const defaultShops = 'https://wzyp.cn/shop/FT7\nhttps://wzyp.cn/shop/G062JE24';
   const savedShops = localStorage.getItem('scraper_target_shops') || defaultShops;
   const savedCookie = localStorage.getItem('scraper_waf_cookie') || '';
   if (cfgTargetShops) cfgTargetShops.value = savedShops;
   if (cfgWafCookie) cfgWafCookie.value = savedCookie;
+
+  // Restore Jev and Proxy configurations from server
+  try {
+    const res = await fetch('/api/jev/config');
+    const json = await res.json();
+    if (json.success && json.data) {
+      if (cfgJevEnabled) cfgJevEnabled.checked = json.data.enabled;
+      if (cfgJevBaseUrl) cfgJevBaseUrl.value = json.data.baseUrl || 'https://api.typesafe.ai/v1/systemone';
+      if (cfgJevModel) cfgJevModel.value = json.data.model || 'jev-latest';
+      if (cfgUseProxy) cfgUseProxy.checked = json.data.useProxy;
+      if (cfgProxyUrl) cfgProxyUrl.value = json.data.proxyUrl || '';
+      if (json.data.hasKey && cfgJevKey) {
+        cfgJevKey.placeholder = `已配置密钥 (${json.data.maskedKey})，留空不修改`;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to load Jev config from server:', err);
+  }
 }
 
 // Save settings
-function saveConfig() {
+async function saveConfig() {
   const shops = cfgTargetShops.value.trim();
   const cookie = cfgWafCookie.value.trim();
   localStorage.setItem('scraper_target_shops', shops);
   localStorage.setItem('scraper_waf_cookie', cookie);
-  showToast('💾 小铺配置已保存！抓取时将依次扫描处理。');
+
+  // Save Jev and Proxy settings to server
+  const jevPayload = {
+    enabled: cfgJevEnabled ? cfgJevEnabled.checked : false,
+    baseUrl: cfgJevBaseUrl ? cfgJevBaseUrl.value.trim() : '',
+    model: cfgJevModel ? cfgJevModel.value.trim() : 'jev-latest',
+    useProxy: cfgUseProxy ? cfgUseProxy.checked : false,
+    proxyUrl: cfgProxyUrl ? cfgProxyUrl.value.trim() : ''
+  };
+
+  const keyInput = cfgJevKey ? cfgJevKey.value.trim() : '';
+  if (keyInput) {
+    jevPayload.apiKey = keyInput;
+  }
+
+  try {
+    const res = await fetch('/api/jev/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(jevPayload)
+    });
+    const result = await res.json();
+    if (result.success) {
+      showToast('💾 系统管理配置已保存，Jev 与代理设置已实时生效！');
+      if (cfgJevKey && keyInput) {
+        cfgJevKey.value = '';
+        cfgJevKey.placeholder = `已更新密钥 (${keyInput.slice(0, 4)}...${keyInput.slice(-4)})`;
+      }
+    } else {
+      showToast('⚠️ 配置已部分保存，但 Jev 服务端更新异常: ' + result.error);
+    }
+  } catch (err) {
+    showToast('💾 本地小铺配置已保存！服务端通讯异常: ' + err.message);
+  }
+
   closeModal('modal-config');
+}
+
+// Test TypeSafe Jev API connection
+async function handleTestJev() {
+  if (!btnTestJev) return;
+
+  btnTestJev.disabled = true;
+  testJevText.textContent = '连接测试中...';
+  testJevResult.className = 'mt-2 p-2 rounded-lg text-[11px] bg-slate-100 text-slate-700 block';
+  testJevResult.textContent = '正在向 TypeSafe Jev API 发送探测请求 (POST /v1/systemone)...';
+
+  const payload = {
+    baseUrl: cfgJevBaseUrl ? cfgJevBaseUrl.value.trim() : '',
+    useProxy: cfgUseProxy ? cfgUseProxy.checked : false,
+    proxyUrl: cfgProxyUrl ? cfgProxyUrl.value.trim() : ''
+  };
+
+  const keyInput = cfgJevKey ? cfgJevKey.value.trim() : '';
+  if (keyInput) {
+    payload.apiKey = keyInput;
+  }
+
+  try {
+    const res = await fetch('/api/jev/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json();
+
+    if (json.success) {
+      testJevResult.className = 'mt-2 p-2.5 rounded-lg text-[11px] bg-emerald-50 text-emerald-800 border border-emerald-200 block';
+      testJevResult.innerHTML = `✅ <strong>连接成功！</strong> ${escapeHtml(json.message)} (模型: ${escapeHtml(json.model || 'jev-latest')})`;
+    } else {
+      testJevResult.className = 'mt-2 p-2.5 rounded-lg text-[11px] bg-red-50 text-red-700 border border-red-200 block';
+      testJevResult.innerHTML = `❌ <strong>连接失败：</strong> ${escapeHtml(json.message)}`;
+    }
+  } catch (err) {
+    testJevResult.className = 'mt-2 p-2.5 rounded-lg text-[11px] bg-red-50 text-red-700 border border-red-200 block';
+    testJevResult.innerHTML = `❌ <strong>请求发生错误：</strong> ${escapeHtml(err.message)}`;
+  } finally {
+    btnTestJev.disabled = false;
+    testJevText.textContent = '测试 TypeSafe Jev 连通性';
+  }
 }
 
 // Load Statistics

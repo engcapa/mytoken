@@ -4,6 +4,7 @@ import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import config from '../config/index.js';
 import { shopService, logService } from './db.js';
+import { jevService, parseProxy } from './jev.js';
 
 function getBrowserPath() {
   const candidates = [
@@ -128,6 +129,9 @@ export class ScraperService {
     if (!shopCode) return { success: false, items: [], message: 'No shop code' };
 
     const cookie = customCookie || this.cookie;
+    const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
+    const proxyConfig = config.proxy.enabled && proxyUrl ? parseProxy(proxyUrl) : false;
+
     const headers = {
       'User-Agent': this.userAgent,
       'Content-Type': 'application/json',
@@ -142,7 +146,7 @@ export class ScraperService {
       const catRes = await axios.post(
         'https://wzyp.cn/shopApi/Shop/categoryList',
         { token: shopCode, goods_type: 'card', category_key: '' },
-        { headers, timeout: 15000, validateStatus: () => true }
+        { headers, proxy: proxyConfig, timeout: 15000, validateStatus: () => true }
       );
 
       if (catRes.status >= 400 || !catRes.data || catRes.data.code !== 1) {
@@ -184,7 +188,7 @@ export class ScraperService {
                 current: currentPage,
                 pageSize: 100
               },
-              { headers, timeout: 15000, validateStatus: () => true }
+              { headers, proxy: proxyConfig, timeout: 15000, validateStatus: () => true }
             );
 
             if (goodsRes.status !== 200 || !goodsRes.data?.data?.list) {
@@ -257,6 +261,9 @@ export class ScraperService {
    */
   async fetchHtml(url, customCookie = '') {
     const cookie = customCookie || this.cookie;
+    const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
+    const proxyConfig = config.proxy.enabled && proxyUrl ? parseProxy(proxyUrl) : false;
+
     const headers = {
       'User-Agent': this.userAgent,
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -272,6 +279,7 @@ export class ScraperService {
 
     const response = await axios.get(url, {
       headers,
+      proxy: proxyConfig,
       timeout: 15000,
       validateStatus: () => true
     });
@@ -300,8 +308,9 @@ export class ScraperService {
 
   /**
    * Resilient DOM Parser supporting multiple shop themes and layouts
+   * Integrates TypeSafe Jev System One model to intelligently identify the genuine products container
    */
-  parseShops(html, baseUrl) {
+  async parseShops(html, baseUrl) {
     const $ = cheerio.load(html);
     const shops = [];
     const shopCode = extractShopCode(baseUrl);
@@ -333,17 +342,37 @@ export class ScraperService {
       'table tbody tr'
     ];
 
-    let foundItems = null;
+    const candidates = [];
     for (const sel of selectors) {
       const elements = $(sel);
       if (elements.length > 0) {
-        foundItems = { sel, elements };
-        break;
+        candidates.push({
+          selector: sel,
+          elements,
+          count: elements.length,
+          sampleText: elements.first().text().replace(/\s+/g, ' ').trim().slice(0, 100)
+        });
       }
     }
 
-    if (foundItems && foundItems.elements.length > 0) {
-      foundItems.elements.each((index, el) => {
+    let chosenCandidate = candidates[0] || null;
+
+    // TypeSafe Jev System One Assistance
+    if (candidates.length > 1 && jevService.enabled && jevService.apiKey) {
+      try {
+        console.log(`[Jev Assistant] Evaluating ${candidates.length} candidate container structures with TypeSafe Jev...`);
+        const jevJudgement = await jevService.judgeProductContainers(candidates);
+        if (jevJudgement?.chosenCandidate) {
+          chosenCandidate = jevJudgement.chosenCandidate;
+          console.log(`[Jev Assistant] Decision: Selected "${chosenCandidate.selector}" with confidence ${(jevJudgement.confidence * 100).toFixed(1)}%`);
+        }
+      } catch (jevErr) {
+        console.warn('[Jev Assistant] Evaluation bypassed due to error:', jevErr.message);
+      }
+    }
+
+    if (chosenCandidate && chosenCandidate.elements.length > 0) {
+      chosenCandidate.elements.each((index, el) => {
         const item = $(el);
         const title = item.find('h1, h2, h3, h4, .title, .name, .goods-name, .goods-title, .goods_name, td.name, td.title').first().text().trim() ||
                       item.find('a').first().text().trim();
@@ -403,7 +432,7 @@ export class ScraperService {
           sourceUrl: fullUrl, // Direct product link!
           images: fullImg ? [fullImg] : [],
           rawData: {
-            selectorUsed: foundItems.sel,
+            selectorUsed: chosenCandidate.selector,
             shopTitle: shopHeaderTitle,
             extractedAt: new Date().toISOString()
           }
@@ -429,16 +458,22 @@ export class ScraperService {
 
     try {
       console.log(`[Browser Scraper] Launching ${interactive ? 'interactive' : 'headless'} browser for: ${targetUrl}`);
+      const browserArgs = [
+        '--window-size=1200,800',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled'
+      ];
+      const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
+      if (config.proxy.enabled && proxyUrl) {
+        browserArgs.push(`--proxy-server=${proxyUrl}`);
+      }
+
       browser = await puppeteer.launch({
         executablePath: browserPath,
         headless: !interactive,
         defaultViewport: null,
-        args: [
-          '--window-size=1200,800',
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled'
-        ]
+        args: browserArgs
       });
 
       const pages = await browser.pages();
@@ -572,7 +607,7 @@ export class ScraperService {
       } else {
         // Fallback: parse rendered DOM across varying themes
         const renderedHtml = await page.content();
-        goods = this.parseShops(renderedHtml, targetUrl);
+        goods = await this.parseShops(renderedHtml, targetUrl);
       }
 
       await browser.close();
@@ -680,7 +715,7 @@ export class ScraperService {
         };
       }
 
-      const shops = this.parseShops(response.data, target);
+      const shops = await this.parseShops(response.data, target);
       if (shops.length > 0) {
         const savedCount = shopService.upsertBatch(shops);
         const message = `[${shopCode}] DOM解析成功！解析到 ${shops.length} 条商品，保存 ${savedCount} 条。`;
