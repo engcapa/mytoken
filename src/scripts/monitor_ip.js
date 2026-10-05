@@ -14,14 +14,36 @@ if (!fs.existsSync(dataDir)) {
 }
 
 const targetUrl = 'https://wzyp.cn/shop/FT7';
-const checkIntervalMs = 60 * 1000; // Check every 60 seconds (1 minute)
-const startTime = Date.now();
+const checkIntervalMs = 5 * 60 * 1000; // Check every 5 minutes (300 seconds)
+
+let startTime = Date.now();
 let checkCount = 0;
+
+if (fs.existsSync(statusFilePath)) {
+  try {
+    const prev = JSON.parse(fs.readFileSync(statusFilePath, 'utf8'));
+    if (prev.startTimestamp && typeof prev.startTimestamp === 'number') {
+      startTime = prev.startTimestamp;
+    } else if (prev.startedAt) {
+      const parsed = Date.parse(prev.startedAt);
+      if (!isNaN(parsed)) {
+        startTime = parsed;
+      }
+    }
+    if (typeof prev.checkCount === 'number') {
+      checkCount = prev.checkCount;
+    }
+  } catch {
+    // Ignore JSON read error
+  }
+}
 
 function formatDuration(ms) {
   const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}小时${minutes}分${seconds}秒`;
   if (minutes === 0) return `${seconds}秒`;
   return `${minutes}分${seconds}秒`;
 }
@@ -90,6 +112,7 @@ async function runCheck() {
     statusMessage: result.statusMessage,
     proxyStatus: result.proxyStatus,
     checkCount,
+    startTimestamp: startTime,
     startedAt: new Date(startTime).toLocaleString('zh-CN', { hour12: false }),
     lastCheckAt: nowStr,
     elapsedMs,
@@ -116,7 +139,7 @@ async function runCheck() {
 console.log(`================================================================`);
 console.log(`🔍 启动本机 IP 解封自动监控定时任务`);
 console.log(`🎯 目标监测链接: ${targetUrl} (直连无代理)`);
-console.log(`⏱️ 探测频率: 每 60 秒 (1分钟) 自动探针一次`);
+console.log(`⏱️ 探测频率: 每 5 分钟 (300 秒) 自动探针一次`);
 console.log(`📂 状态文件同步: ${statusFilePath}`);
 console.log(`================================================================`);
 
