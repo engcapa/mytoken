@@ -46,7 +46,7 @@ export function parseNumericPrice(priceStr = '') {
 }
 
 /**
- * Determine whether a product is in stock
+ * Determine whether a product is in stock based on text labels
  */
 export function parseStockStatus(text = '', raw = '') {
   const combined = `${text} ${raw}`.toLowerCase();
@@ -64,12 +64,28 @@ export function parseStockStatus(text = '', raw = '') {
     return { inStock: 0, stockText: '缺货' };
   }
 
-  // Extract explicit stock count if present
+  // Extract explicit stock count if present, e.g. "剩余18件" or "库存 12"
+  const remainingMatch = combined.match(/剩余\s*(\d+)\s*件/i);
+  if (remainingMatch) {
+    const count = parseInt(remainingMatch[1], 10);
+    return { inStock: count > 0 ? 1 : 0, stockText: count > 0 ? `剩余${count}件` : '缺货' };
+  }
+
   const countMatch = combined.match(/库存[:：\s]*(\d+)/i);
   if (countMatch && parseInt(countMatch[1], 10) === 0) {
     return { inStock: 0, stockText: '缺货' };
   } else if (countMatch) {
     return { inStock: 1, stockText: `库存 ${countMatch[1]}` };
+  }
+
+  if (combined.includes('库存充足')) {
+    return { inStock: 1, stockText: '库存充足' };
+  }
+  if (combined.includes('库存少量')) {
+    return { inStock: 1, stockText: '库存少量' };
+  }
+  if (combined.includes('库存一般')) {
+    return { inStock: 1, stockText: '库存一般' };
   }
 
   return { inStock: 1, stockText: '有货' };
@@ -502,152 +518,380 @@ export class ScraperService {
     if (str.startsWith('http://') || str.startsWith('https://')) {
       return str;
     }
-    // If it's a code like "FT7"
     return `https://wzyp.cn/shop/${str.trim()}`;
   }
 
   /**
-   * Seed realistic sample multi-shop data with in-stock and prices sorted
+   * Seed realistic sample products based on the exact live FT7 shop screenshot
    */
   static seedSampleData() {
     const samples = [
-      // FT7 小铺商品
+      // ==========================================
+      // FT7 小铺 - G Plus 分类真实商品 (基于截图真实数据)
+      // ==========================================
+      // 【有货商品 - 按价格从低到高】
       {
-        externalId: 'wzyp_FT7_001',
+        externalId: 'wzyp_FT7_GP_001',
         shopCode: 'FT7',
-        title: 'OpenAI 5$ 开发者测试 Key (纯官方直连)',
-        category: 'API额度',
-        description: '官方开发者控制台导出，支持 gpt-4o-mini、tts、whisper 等基础接口快速测试。',
-        price: '¥ 12.00',
-        priceNum: 12.0,
+        title: 'plus有RT有帐密 质保首登 可反代可网页',
+        category: 'G Plus',
+        description: '原价25元限时特惠，带RefreshToken及网页账号密码，支持反代直连或网页端直接登录。',
+        price: '¥ 22.50',
+        priceNum: 22.5,
         inStock: 1,
-        stockText: '库存 88',
-        contact: '微信: ai_service_01',
+        stockText: '库存充足',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
         address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7',
-        images: ['https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=500&auto=format&fit=crop']
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       },
       {
-        externalId: 'wzyp_FT7_002',
+        externalId: 'wzyp_FT7_GP_002',
         shopCode: 'FT7',
-        title: 'OpenAI 120$ 高并发企业级中转 Key',
-        category: 'API额度',
-        description: '国内直连极速响应，支持 gpt-4o、o1-preview 等全系大模型，每分钟万次并发。',
-        price: '¥ 68.00',
-        priceNum: 68.0,
+        title: 'Plus已接马【仅反代发货Json】不能网页端',
+        category: 'G Plus',
+        description: '仅供反代程序配置Json使用，不支持网页端直接访问，极速自动发货。',
+        price: '¥ 22.75',
+        priceNum: 22.75,
         inStock: 1,
-        stockText: '库存 25',
-        contact: '微信: ai_service_01',
+        stockText: '库存充足',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
         address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7',
-        images: ['https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=500&auto=format&fit=crop']
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       },
       {
-        externalId: 'wzyp_FT7_003',
+        externalId: 'wzyp_FT7_GP_003',
         shopCode: 'FT7',
-        title: 'Claude 3.5 Sonnet 独享会员号 (含Outlook邮箱)',
-        category: 'Claude专区',
-        description: '原生欧美纯净IP注册，独享未激活新号，已升级至 Pro 会员，质保首登。',
+        title: '已接马Plus不带账密【仅反代使用】401可找回有RT',
+        category: 'G Plus',
+        description: '带RefreshToken，若出现401认证异常可联系找回，专供API中转与反代。',
+        price: '¥ 23.95',
+        priceNum: 23.95,
+        inStock: 1,
+        stockText: '库存充足',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_004',
+        shopCode: 'FT7',
+        title: 'plus成品【域名邮箱】未接马 质保首登',
+        category: 'G Plus',
+        description: '绑定独立自定义域名邮箱，一手纯净未接码，质保首次成功登录。',
+        price: '¥ 28.54',
+        priceNum: 28.54,
+        inStock: 1,
+        stockText: '库存一般',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_005',
+        shopCode: 'FT7',
+        title: '未接马 Plus成品号 纯手工产出 质保首登 部分带重置',
+        category: 'G Plus',
+        description: '纯手工纯净环境产出，未接码成品账号，质保首登，部分批次带重置密保。',
+        price: '¥ 30.02',
+        priceNum: 30.02,
+        inStock: 1,
+        stockText: '库存少量',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_006',
+        shopCode: 'FT7',
+        title: 'PLUS未接马 成品号 质保首登',
+        category: 'G Plus',
+        description: '现成Plus成品独享号，未接码，质保首次登录。',
+        price: '¥ 32.50',
+        priceNum: 32.5,
+        inStock: 1,
+        stockText: '库存少量',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_007',
+        shopCode: 'FT7',
+        title: 'Plus丨已接马丨带1次重置',
+        category: 'G Plus',
+        description: '带一次重置密码机会，保障售后安全，已激活Plus订阅。',
+        price: '¥ 36.18',
+        priceNum: 36.18,
+        inStock: 1,
+        stockText: '剩余18件',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_008',
+        shopCode: 'FT7',
+        title: '【质保3h首登】plus会员iCloud或者域名邮箱新开的各种渠道',
+        category: 'G Plus',
+        description: '新开iCloud/优质域名邮箱渠道，3小时首登无忧售后保障。',
+        price: '¥ 36.30',
+        priceNum: 36.3,
+        inStock: 1,
+        stockText: '剩余3件',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_009',
+        shopCode: 'FT7',
+        title: 'Plus丨已接马丨带2-3次重置',
+        category: 'G Plus',
+        description: '高权重账号，带2到3次重置密保卡，长期使用更稳定。',
+        price: '¥ 41.80',
+        priceNum: 41.8,
+        inStock: 1,
+        stockText: '库存充足',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_010',
+        shopCode: 'FT7',
+        title: 'Plus成品号 未接马 质保首登 (高级独享)',
+        category: 'G Plus',
+        description: '独享高级成品号，未接马，质保首次登录。',
+        price: '¥ 47.13',
+        priceNum: 47.13,
+        inStock: 1,
+        stockText: '库存少量',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_011',
+        shopCode: 'FT7',
+        title: 'iCloud邮箱|PLUS成品号已刷满额度+1张重置卡|还剩4天',
+        category: 'G Plus',
+        description: 'iCloud原生邮箱，已刷满使用额度，附带1张重置卡，剩余订阅有效期4天。',
+        price: '¥ 60.74',
+        priceNum: 60.74,
+        inStock: 1,
+        stockText: '剩余1件',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_012',
+        shopCode: 'FT7',
+        title: '【稳】10月4号产PLUS独享|实卡最稳|已稳定25天',
+        category: 'G Plus',
+        description: '真实海外实体信用卡支付订阅，已平稳运行25天未翻车，极其抗封。',
+        price: '¥ 71.90',
+        priceNum: 71.9,
+        inStock: 1,
+        stockText: '库存一般',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_013',
+        shopCode: 'FT7',
+        title: '域名邮箱PLUS成品号已刷|已活4天',
+        category: 'G Plus',
+        description: '域名邮箱注册，已安全度过前4天风控期。',
+        price: '¥ 76.76',
+        priceNum: 76.76,
+        inStock: 1,
+        stockText: '剩余2件',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_014',
+        shopCode: 'FT7',
+        title: '【官方充值】Codex AI Plus 全自动24小时自动充值CDK',
+        category: 'G Plus',
+        description: '全自动24小时卡密自动充值兑换，官方正规渠道。',
+        price: '¥ 127.00',
+        priceNum: 127.0,
+        inStock: 1,
+        stockText: '库存充足',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_015',
+        shopCode: 'FT7',
+        title: '【官方充值】非区G plus cdk24小时自动充值',
+        category: 'G Plus',
+        description: '非区专用官方直充兑换卡密，即买即充，无延迟。',
+        price: '¥ 132.00',
+        priceNum: 132.0,
+        inStock: 1,
+        stockText: '库存充足',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+
+      // 【截图中展示的部分缺货商品 - 供缺货过滤对比测试】
+      {
+        externalId: 'wzyp_FT7_GP_016_oos',
+        shopCode: 'FT7',
+        title: '【无质保】G plus U端 未接马',
+        category: 'G Plus',
+        description: '低价走量款，无质保首登，当前批次已售罄。',
+        price: '¥ 11.39',
+        priceNum: 11.39,
+        inStock: 0,
+        stockText: '缺货',
+        contact: 'TG: https://t.me/ft7tz',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_017_oos',
+        shopCode: 'FT7',
+        title: '新日期Plus成品 质保首登 momo渠道',
+        category: 'G Plus',
+        description: '本周momo渠道热销已抢空。',
+        price: '¥ 14.00',
+        priceNum: 14.0,
+        inStock: 0,
+        stockText: '缺货',
+        contact: 'TG: https://t.me/ft7tz',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_GP_018_oos',
+        shopCode: 'FT7',
+        title: 'G Plus月卡 稳如老狗 放心购买 已接马',
+        category: 'G Plus',
+        description: '原价30元特价22元，目前缺货等待补卡中。',
+        price: '¥ 22.00',
+        priceNum: 22.0,
+        inStock: 0,
+        stockText: '缺货',
+        contact: 'TG: https://t.me/ft7tz',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+
+      // ==========================================
+      // FT7 小铺 - 其他分类商品 (对应截图顶部Tabs)
+      // ==========================================
+      // Claude | g.rok (共24种商品中的代表性在售商品)
+      {
+        externalId: 'wzyp_FT7_CL_001',
+        shopCode: 'FT7',
+        title: 'G.rok 2 早期测试资格账号 (含X Premium权限)',
+        category: 'Claude | g.rok',
+        description: '附带X平台会员权限，畅享Grok 2生图及深度对话能力。',
+        price: '¥ 45.00',
+        priceNum: 45.0,
+        inStock: 1,
+        stockText: '库存 16',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
+      },
+      {
+        externalId: 'wzyp_FT7_CL_002',
+        shopCode: 'FT7',
+        title: 'Claude 3.5 Sonnet Pro 官方月度订阅独享号',
+        category: 'Claude | g.rok',
+        description: '欧美原生IP开通Pro计划，无合租风险，质保首登。',
         price: '¥ 145.00',
         priceNum: 145.0,
         inStock: 1,
-        stockText: '库存 12',
-        contact: '微信: ai_service_01',
+        stockText: '库存 8',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
         address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7',
-        images: ['https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500&auto=format&fit=crop']
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       },
+
+      // 谷歌 | Gemini (共23种商品)
       {
-        externalId: 'wzyp_FT7_004',
+        externalId: 'wzyp_FT7_GM_001',
         shopCode: 'FT7',
-        title: 'ChatGPT Plus 官方代充 (正规Stripe支付/带账单)',
-        category: 'ChatGPT专区',
-        description: '官方合法正规卡支付，可续费，提供完整苹果/Stripe账单，支持自备号升级。',
-        price: '¥ 158.00',
-        priceNum: 158.0,
+        title: 'Google One 2TB + Gemini Advanced 体验号 (1个月)',
+        category: '谷歌 | Gemini',
+        description: '官方2TB云存储空间，解锁Gemini 1.5 Pro百万上下文特权。',
+        price: '¥ 18.50',
+        priceNum: 18.5,
         inStock: 1,
-        stockText: '库存 30',
-        contact: '微信: ai_service_01',
+        stockText: '库存 35',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
         address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7',
-        images: ['https://images.unsplash.com/photo-1677442136019-21780efad99a?w=500&auto=format&fit=crop']
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       },
-      // 另一个小铺 (AI9) 的商品 - 有货及缺货测试
       {
-        externalId: 'wzyp_AI9_001',
-        shopCode: 'AI9',
-        title: '海外 Apple ID 独享账号 (美区已激活)',
-        category: '开发者工具',
-        description: '美区 App Store 独享已激活，带密保问题与安全邮箱，可绑定免密充值卡。',
-        price: '¥ 9.90',
-        priceNum: 9.9,
+        externalId: 'wzyp_FT7_GM_002',
+        shopCode: 'FT7',
+        title: 'Gemini Advanced 独享学生认证号 (1年期资格)',
+        category: '谷歌 | Gemini',
+        description: '长期稳定通道，附赠教育权益和高额云盘容量。',
+        price: '¥ 78.00',
+        priceNum: 78.0,
         inStock: 1,
-        stockText: '库存 150',
-        contact: 'TG: @ai9_store',
-        address: 'wzyp.cn/shop/AI9',
-        sourceUrl: 'https://wzyp.cn/shop/AI9',
-        images: ['https://images.unsplash.com/photo-1510519138197-06b8f282415a?w=500&auto=format&fit=crop']
+        stockText: '库存 10',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       },
+
+      // Codex 接码 (共21种商品)
       {
-        externalId: 'wzyp_AI9_002',
-        shopCode: 'AI9',
-        title: 'Cursor Pro AI代码编辑器月卡 (官方代升级)',
-        category: '开发者工具',
-        description: '支持 GPT-4o 及 Claude 3.5 Sonnet 快速补全，程序员效率神器。',
-        price: '¥ 138.00',
-        priceNum: 138.0,
+        externalId: 'wzyp_FT7_CX_001',
+        shopCode: 'FT7',
+        title: 'OpenAI 注册接码专用卡密 (一次性API验证码)',
+        category: 'Codex 接码',
+        description: '支持注册全新ChatGPT账号，高到达率，超时自动返还。',
+        price: '¥ 3.50',
+        priceNum: 3.5,
         inStock: 1,
-        stockText: '库存 18',
-        contact: 'TG: @ai9_store',
-        address: 'wzyp.cn/shop/AI9',
-        sourceUrl: 'https://wzyp.cn/shop/AI9',
-        images: ['https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=500&auto=format&fit=crop']
+        stockText: '库存 200',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       },
       {
-        externalId: 'wzyp_AI9_003',
-        shopCode: 'AI9',
-        title: '【缺货示范】ChatGPT Plus 共享车位 4人车',
-        category: 'ChatGPT专区',
-        description: '4人合租车位，因官方风控本周已售罄补货中。',
-        price: '¥ 45.00',
-        priceNum: 45.0,
-        inStock: 0,
-        stockText: '缺货',
-        contact: 'TG: @ai9_store',
-        address: 'wzyp.cn/shop/AI9',
-        sourceUrl: 'https://wzyp.cn/shop/AI9',
-        images: ['https://images.unsplash.com/photo-1677442136019-21780efad99a?w=500&auto=format&fit=crop']
-      },
-      // 第三个小铺 (VIP8) 的商品
-      {
-        externalId: 'wzyp_VIP8_001',
-        shopCode: 'VIP8',
-        title: 'GitHub Copilot 个人学生包权益资格 (一年质保)',
-        category: '开发者工具',
-        description: '稳定激活 VS Code / JetBrains 系列 IDE，专属导师通道验证。',
-        price: '¥ 85.00',
-        priceNum: 85.0,
+        externalId: 'wzyp_FT7_CX_002',
+        shopCode: 'FT7',
+        title: '英国物理实体手机卡代接码 (一次验证有效)',
+        category: 'Codex 接码',
+        description: '英国原生实体卡，非虚拟号段，专解高风控业务绑定。',
+        price: '¥ 15.00',
+        priceNum: 15.0,
         inStock: 1,
-        stockText: '库存 40',
-        contact: 'QQ: 99998888',
-        address: 'wzyp.cn/shop/VIP8',
-        sourceUrl: 'https://wzyp.cn/shop/VIP8',
-        images: ['https://images.unsplash.com/photo-1618401471353-b98afee0b2eb?w=500&auto=format&fit=crop']
+        stockText: '库存 45',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       },
+
+      // G K12 Team (共16种商品)
       {
-        externalId: 'wzyp_VIP8_002',
-        shopCode: 'VIP8',
-        title: 'Midjourney 标准订阅会员 (月卡代充)',
-        category: 'AI绘画专区',
-        description: '15小时快速生成时间，无限制慢速生成，支持商用版权。',
-        price: '¥ 210.00',
-        priceNum: 210.0,
+        externalId: 'wzyp_FT7_TM_001',
+        shopCode: 'FT7',
+        title: 'ChatGPT Team 团队工作区车位 (月付合租)',
+        category: 'G K12 Team',
+        description: '无限GPT-4o对话次数，独立对话隔离保护，企业级通道。',
+        price: '¥ 48.00',
+        priceNum: 48.0,
         inStock: 1,
-        stockText: '库存 5',
-        contact: 'QQ: 99998888',
-        address: 'wzyp.cn/shop/VIP8',
-        sourceUrl: 'https://wzyp.cn/shop/VIP8',
-        images: ['https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=500&auto=format&fit=crop']
+        stockText: '剩余6件',
+        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
+        address: 'wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/shop/FT7'
       }
     ];
 
