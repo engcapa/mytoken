@@ -11,7 +11,7 @@ if (!fs.existsSync(dbDir)) {
 
 export const db = new DatabaseSync(config.databasePath);
 
-// Initialize database schema
+// Initialize database schema with multi-shop, numeric price and in-stock support
 export function initDatabase() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS shops (
@@ -21,6 +21,10 @@ export function initDatabase() {
       category TEXT DEFAULT 'General',
       description TEXT,
       price TEXT,
+      price_num REAL DEFAULT 0,
+      in_stock INTEGER DEFAULT 1,
+      stock_text TEXT DEFAULT '有货',
+      shop_code TEXT DEFAULT '',
       contact TEXT,
       address TEXT,
       source_url TEXT,
@@ -29,10 +33,6 @@ export function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-
-    CREATE INDEX IF NOT EXISTS idx_shops_external_id ON shops(external_id);
-    CREATE INDEX IF NOT EXISTS idx_shops_category ON shops(category);
-    CREATE INDEX IF NOT EXISTS idx_shops_created_at ON shops(created_at);
 
     CREATE TABLE IF NOT EXISTS scrape_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,26 +43,66 @@ export function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Safely check & alter table for existing database instances
+  try {
+    const tableInfo = db.prepare('PRAGMA table_info(shops)').all();
+    const existingCols = new Set(tableInfo.map(c => c.name));
+    if (!existingCols.has('price_num')) {
+      db.exec('ALTER TABLE shops ADD COLUMN price_num REAL DEFAULT 0');
+    }
+    if (!existingCols.has('in_stock')) {
+      db.exec('ALTER TABLE shops ADD COLUMN in_stock INTEGER DEFAULT 1');
+    }
+    if (!existingCols.has('stock_text')) {
+      db.exec("ALTER TABLE shops ADD COLUMN stock_text TEXT DEFAULT '有货'");
+    }
+    if (!existingCols.has('shop_code')) {
+      db.exec("ALTER TABLE shops ADD COLUMN shop_code TEXT DEFAULT ''");
+    }
+  } catch (err) {
+    console.error('Database migration note:', err.message);
+  }
+
+  // Create indexes after columns are guaranteed to exist
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_shops_external_id ON shops(external_id);
+    CREATE INDEX IF NOT EXISTS idx_shops_category ON shops(category);
+    CREATE INDEX IF NOT EXISTS idx_shops_price_num ON shops(price_num);
+    CREATE INDEX IF NOT EXISTS idx_shops_in_stock ON shops(in_stock);
+    CREATE INDEX IF NOT EXISTS idx_shops_shop_code ON shops(shop_code);
+    CREATE INDEX IF NOT EXISTS idx_shops_created_at ON shops(created_at);
+  `);
 }
 
 // Ensure database tables on import
 initDatabase();
 
 export const shopService = {
-  getShops({ search = '', category = '', page = 1, limit = 20 } = {}) {
+  getShops({ search = '', category = '', shopCode = '', inStockOnly = true, sortBy = 'price_asc', page = 1, limit = 50 } = {}) {
     const offset = (page - 1) * limit;
     const conditions = [];
     const params = [];
 
-    if (search && search.trim()) {
-      conditions.push('(title LIKE ? OR description LIKE ? OR contact LIKE ? OR address LIKE ?)');
-      const term = `%${search.trim()}%`;
-      params.push(term, term, term, term);
+    // Filter in-stock only by default
+    if (inStockOnly) {
+      conditions.push('in_stock = 1');
     }
 
-    if (category && category.trim() && category !== 'All') {
+    if (search && search.trim()) {
+      conditions.push('(title LIKE ? OR description LIKE ? OR contact LIKE ? OR address LIKE ? OR shop_code LIKE ?)');
+      const term = `%${search.trim()}%`;
+      params.push(term, term, term, term, term);
+    }
+
+    if (category && category.trim() && category !== 'All' && category !== '全部') {
       conditions.push('category = ?');
       params.push(category.trim());
+    }
+
+    if (shopCode && shopCode.trim() && shopCode !== 'All' && shopCode !== '全部') {
+      conditions.push('shop_code = ?');
+      params.push(shopCode.trim());
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -73,11 +113,18 @@ export const shopService = {
     const countRes = countStmt.all(...params);
     const total = countRes[0]?.total || 0;
 
-    // Data query
+    // Sorting: Grouped by category, sorted by price from low to high
+    let orderByClause = 'ORDER BY category ASC, price_num ASC, id DESC';
+    if (sortBy === 'price_desc') {
+      orderByClause = 'ORDER BY category ASC, price_num DESC, id DESC';
+    } else if (sortBy === 'time_desc') {
+      orderByClause = 'ORDER BY updated_at DESC, id DESC';
+    }
+
     const dataSql = `
       SELECT * FROM shops
       ${whereClause}
-      ORDER BY updated_at DESC, id DESC
+      ${orderByClause}
       LIMIT ? OFFSET ?
     `;
     const dataStmt = db.prepare(dataSql);
@@ -113,16 +160,34 @@ export const shopService = {
     const imagesJson = Array.isArray(shop.images) ? JSON.stringify(shop.images) : (shop.images || '[]');
     const rawDataJson = typeof shop.rawData === 'object' ? JSON.stringify(shop.rawData) : (shop.rawData || '{}');
     const externalId = shop.externalId || shop.sourceUrl || `custom_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    
+    // Parse numeric price for sorting
+    let priceNum = 0;
+    if (typeof shop.priceNum === 'number') {
+      priceNum = shop.priceNum;
+    } else if (shop.price) {
+      const match = String(shop.price).match(/\d+(\.\d+)?/);
+      priceNum = match ? parseFloat(match[0]) : 0;
+    }
+
+    // Determine stock status
+    const inStock = shop.inStock === undefined ? 1 : (shop.inStock ? 1 : 0);
+    const stockText = shop.stockText || (inStock ? '有货' : '缺货');
+    const shopCode = shop.shopCode || '';
 
     const stmt = db.prepare(`
       INSERT INTO shops (
-        external_id, title, category, description, price, contact, address, source_url, images, raw_data, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        external_id, title, category, description, price, price_num, in_stock, stock_text, shop_code, contact, address, source_url, images, raw_data, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(external_id) DO UPDATE SET
         title = excluded.title,
         category = excluded.category,
         description = excluded.description,
         price = excluded.price,
+        price_num = excluded.price_num,
+        in_stock = excluded.in_stock,
+        stock_text = excluded.stock_text,
+        shop_code = excluded.shop_code,
         contact = excluded.contact,
         address = excluded.address,
         source_url = excluded.source_url,
@@ -133,10 +198,14 @@ export const shopService = {
 
     stmt.run(
       externalId,
-      shop.title || 'Untitled Shop',
+      shop.title || 'Untitled Product',
       shop.category || 'General',
       shop.description || '',
       shop.price || '',
+      priceNum,
+      inStock,
+      stockText,
+      shopCode,
       shop.contact || '',
       shop.address || '',
       shop.sourceUrl || '',
@@ -174,19 +243,38 @@ export const shopService = {
     return stmt.all();
   },
 
+  getShopCodes() {
+    const stmt = db.prepare(`
+      SELECT DISTINCT shop_code, COUNT(*) as count 
+      FROM shops 
+      WHERE shop_code IS NOT NULL AND shop_code != '' 
+      GROUP BY shop_code 
+      ORDER BY count DESC
+    `);
+    return stmt.all();
+  },
+
   getStats() {
     const totalStmt = db.prepare('SELECT COUNT(*) as total FROM shops');
     const total = totalStmt.get()?.total || 0;
 
+    const inStockStmt = db.prepare('SELECT COUNT(*) as total FROM shops WHERE in_stock = 1');
+    const inStockCount = inStockStmt.get()?.total || 0;
+
     const catStmt = db.prepare('SELECT COUNT(DISTINCT category) as count FROM shops');
     const categoriesCount = catStmt.get()?.count || 0;
+
+    const shopCountStmt = db.prepare("SELECT COUNT(DISTINCT shop_code) as count FROM shops WHERE shop_code != ''");
+    const shopCodesCount = shopCountStmt.get()?.count || 0;
 
     const lastLogStmt = db.prepare('SELECT * FROM scrape_logs ORDER BY id DESC LIMIT 1');
     const lastLog = lastLogStmt.get() || null;
 
     return {
       totalShops: total,
+      inStockCount,
       categoriesCount,
+      shopCodesCount,
       lastScrape: lastLog
     };
   }

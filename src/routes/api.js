@@ -4,15 +4,27 @@ import { scraperService, ScraperService } from '../services/scraper.js';
 
 const router = Router();
 
-// GET /api/shops - list shops with pagination & search
+// GET /api/shops - list products (grouped/sorted by category, price asc, in-stock default)
 router.get('/shops', (req, res) => {
   try {
-    const { search = '', category = '', page = '1', limit = '12' } = req.query;
+    const {
+      search = '',
+      category = '',
+      shopCode = '',
+      inStockOnly = 'true',
+      sortBy = 'price_asc',
+      page = '1',
+      limit = '100'
+    } = req.query;
+
     const result = shopService.getShops({
       search: String(search),
       category: String(category),
+      shopCode: String(shopCode),
+      inStockOnly: inStockOnly !== 'false',
+      sortBy: String(sortBy),
       page: parseInt(page, 10) || 1,
-      limit: parseInt(limit, 10) || 12
+      limit: parseInt(limit, 10) || 100
     });
     res.json({ success: true, data: result });
   } catch (err) {
@@ -33,34 +45,38 @@ router.get('/shops/:id', (req, res) => {
   }
 });
 
-// POST /api/shops - add or update shop manually
+// POST /api/shops - add or update shop/product manually
 router.post('/shops', (req, res) => {
   try {
-    const { title, category, description, price, contact, address, sourceUrl, images } = req.body;
+    const { title, category, description, price, priceNum, inStock, stockText, shopCode, contact, address, sourceUrl, images } = req.body;
     if (!title || !title.trim()) {
-      return res.status(400).json({ success: false, error: 'Shop title is required' });
+      return res.status(400).json({ success: false, error: 'Title is required' });
     }
     const externalId = shopService.upsertShop({
       title: title.trim(),
       category: category?.trim() || 'General',
       description,
       price,
+      priceNum,
+      inStock: inStock !== undefined ? inStock : 1,
+      stockText,
+      shopCode,
       contact,
       address,
       sourceUrl,
       images: Array.isArray(images) ? images : []
     });
-    res.json({ success: true, message: 'Shop saved successfully', id: externalId });
+    res.json({ success: true, message: 'Saved successfully', id: externalId });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// DELETE /api/shops/:id - delete shop
+// DELETE /api/shops/:id - delete product
 router.delete('/shops/:id', (req, res) => {
   try {
     shopService.deleteShop(req.params.id);
-    res.json({ success: true, message: 'Shop deleted successfully' });
+    res.json({ success: true, message: 'Deleted successfully' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -71,6 +87,16 @@ router.get('/categories', (req, res) => {
   try {
     const categories = shopService.getCategories();
     res.json({ success: true, data: categories });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/shop-codes - get distinct shop codes
+router.get('/shop-codes', (req, res) => {
+  try {
+    const codes = shopService.getShopCodes();
+    res.json({ success: true, data: codes });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -97,15 +123,15 @@ router.get('/logs', (req, res) => {
   }
 });
 
-// POST /api/scrape - trigger scraper (supports fast HTTP or interactive browser mode)
+// POST /api/scrape - trigger scraper (supports fast HTTP or interactive browser mode, single or multiple shops)
 router.post('/scrape', async (req, res) => {
   try {
-    const { url, cookie, interactive = false } = req.body;
+    const { url, urls, cookie, interactive = false } = req.body;
     let result;
     if (interactive) {
-      result = await scraperService.runInteractive({ url });
+      result = await scraperService.runInteractive({ url, urls });
     } else {
-      result = await scraperService.run({ url, cookie });
+      result = await scraperService.run({ url, urls, cookie });
     }
     res.json(result);
   } catch (err) {
@@ -113,11 +139,11 @@ router.post('/scrape', async (req, res) => {
   }
 });
 
-// POST /api/seed - seed sample shops for testing UI
+// POST /api/seed - seed sample shops/goods for testing UI
 router.post('/seed', (req, res) => {
   try {
     const count = ScraperService.seedSampleData();
-    res.json({ success: true, message: `Successfully seeded ${count} sample shops!`, count });
+    res.json({ success: true, message: `Successfully seeded ${count} sample items across multiple shops!`, count });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

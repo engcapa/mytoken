@@ -9,12 +9,14 @@ A lightweight, modern Node.js web application designed to scrape, store, and dis
 - ⚡ **Modern Stack**: Built with Node.js ES Modules, Express 5, Axios HTTP client, and Cheerio HTML parser.
 - 💾 **Zero-Dependency Local Storage**: Powered by the native `node:sqlite` (`DatabaseSync`) module in Node.js 22+, providing fast, reliable SQLite storage without requiring C++ build tools or python-gyp.
 - 🛡️ **WAF Challenge Detection**: Built-in detection for Alibaba Cloud ESA WAF slide challenges, with credential injection support (custom cookies and URLs).
+- 🏪 **Multi-Shop Aggregation**: Support configuring and scraping multiple shops under wzyp.cn (e.g. `FT7`, `AI9`, etc.) in a single batch.
+- 📊 **Categorized Table List View (No Cards)**: Items are grouped cleanly by category, filtered to in-stock goods only, and sorted by price from low to high.
 - 🖥️ **Responsive Web Dashboard**: Clean, responsive frontend styled with Tailwind CSS:
-  - Real-time statistics (total shops, categories, last scrape status)
-  - Instant search filtering (title, description, contact, address)
-  - Category pill filter tabs
-  - One-click live scraping and demo data seeding
-  - Manual shop entry and management
+  - Real-time statistics (in-stock items count, categories, shops covered)
+  - Instant search filtering (title, specs, shop code)
+  - Category pill filter tabs and shop dropdown filter
+  - In-stock only toggle (enabled by default)
+  - One-click batch scraping and demo data seeding
 - 🛠️ **CLI & REST API**: Run scraping tasks via terminal or integrate with external services through REST endpoints.
 
 ---

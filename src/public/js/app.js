@@ -1,15 +1,18 @@
 // Frontend Application State
 const state = {
   page: 1,
-  limit: 12,
+  limit: 100,
   search: '',
   category: '',
+  shopCode: '',
+  inStockOnly: true,
+  sortBy: 'price_asc',
   totalPages: 1,
   isScraping: false
 };
 
 // DOM Elements
-const shopsGrid = document.getElementById('shops-grid');
+const productsListView = document.getElementById('products-list-view');
 const emptyState = document.getElementById('empty-state');
 const paginationBar = document.getElementById('pagination-bar');
 const pageIndicator = document.getElementById('page-indicator');
@@ -17,6 +20,8 @@ const btnPrevPage = document.getElementById('btn-prev-page');
 const btnNextPage = document.getElementById('btn-next-page');
 const searchInput = document.getElementById('search-input');
 const categoryPills = document.getElementById('category-pills');
+const shopSelect = document.getElementById('shop-select');
+const toggleInStock = document.getElementById('toggle-instock');
 const btnScrape = document.getElementById('btn-scrape');
 const scrapeIcon = document.getElementById('scrape-icon');
 const scrapeText = document.getElementById('scrape-text');
@@ -25,17 +30,19 @@ const interactiveIcon = document.getElementById('interactive-icon');
 const interactiveText = document.getElementById('interactive-text');
 const btnSeed = document.getElementById('btn-seed');
 const btnConfig = document.getElementById('btn-config');
-const btnAddShop = document.getElementById('btn-add-shop');
-const btnSubmitAdd = document.getElementById('btn-submit-add');
 const btnSaveConfig = document.getElementById('btn-save-config');
+const cfgTargetShops = document.getElementById('cfg-target-shops');
+const cfgWafCookie = document.getElementById('cfg-waf-cookie');
 const noticeBanner = document.getElementById('notice-banner');
 const noticeClose = document.getElementById('notice-close');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+  restoreConfig();
   loadStats();
   loadCategories();
-  loadShops();
+  loadShopCodes();
+  loadProducts();
   bindEvents();
 });
 
@@ -48,30 +55,42 @@ function bindEvents() {
     searchTimer = setTimeout(() => {
       state.search = e.target.value.trim();
       state.page = 1;
-      loadShops();
+      loadProducts();
     }, 300);
+  });
+
+  // In-Stock toggle
+  toggleInStock.addEventListener('change', (e) => {
+    state.inStockOnly = e.target.checked;
+    state.page = 1;
+    loadProducts();
+  });
+
+  // Shop filter change
+  shopSelect.addEventListener('change', (e) => {
+    state.shopCode = e.target.value;
+    state.page = 1;
+    loadProducts();
   });
 
   // Pagination
   btnPrevPage.addEventListener('click', () => {
     if (state.page > 1) {
       state.page--;
-      loadShops();
+      loadProducts();
     }
   });
 
   btnNextPage.addEventListener('click', () => {
     if (state.page < state.totalPages) {
       state.page++;
-      loadShops();
+      loadProducts();
     }
   });
 
   // Scrape actions
   btnScrape.addEventListener('click', () => handleScrape({ interactive: false }));
-  if (btnInteractive) {
-    btnInteractive.addEventListener('click', () => handleScrape({ interactive: true }));
-  }
+  btnInteractive.addEventListener('click', () => handleScrape({ interactive: true }));
 
   // Seed sample action
   btnSeed.addEventListener('click', handleSeed);
@@ -80,12 +99,26 @@ function bindEvents() {
   btnConfig.addEventListener('click', () => openModal('modal-config'));
   btnSaveConfig.addEventListener('click', saveConfig);
 
-  // Add Shop Modal
-  btnAddShop.addEventListener('click', () => openModal('modal-add'));
-  btnSubmitAdd.addEventListener('click', handleAddShop);
-
   // Notice close
   noticeClose.addEventListener('click', () => noticeBanner.classList.add('hidden'));
+}
+
+// Restore saved settings
+function restoreConfig() {
+  const savedShops = localStorage.getItem('scraper_target_shops') || 'https://wzyp.cn/shop/FT7';
+  const savedCookie = localStorage.getItem('scraper_waf_cookie') || '';
+  if (cfgTargetShops) cfgTargetShops.value = savedShops;
+  if (cfgWafCookie) cfgWafCookie.value = savedCookie;
+}
+
+// Save settings
+function saveConfig() {
+  const shops = cfgTargetShops.value.trim();
+  const cookie = cfgWafCookie.value.trim();
+  localStorage.setItem('scraper_target_shops', shops);
+  localStorage.setItem('scraper_waf_cookie', cookie);
+  showToast('💾 小铺配置已保存！抓取时将依次扫描处理。');
+  closeModal('modal-config');
 }
 
 // Load Statistics
@@ -94,21 +127,20 @@ async function loadStats() {
     const res = await fetch('/api/stats');
     const json = await res.json();
     if (json.success) {
-      document.getElementById('stat-total').textContent = json.data.totalShops || 0;
+      document.getElementById('stat-instock').textContent = json.data.inStockCount || 0;
       document.getElementById('stat-categories').textContent = json.data.categoriesCount || 0;
+      document.getElementById('stat-shops').textContent = json.data.shopCodesCount || 0;
       
       const last = json.data.lastScrape;
       if (last) {
-        const timeStr = new Date(last.created_at).toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
+        const timeStr = new Date(last.created_at).toLocaleTimeString('zh-CN', {
           hour: '2-digit',
           minute: '2-digit'
         });
-        const badge = last.status === 'SUCCESS' ? '🟢 Success' : (last.status === 'WAF_BLOCKED' ? '🟠 WAF Challenge' : '🔴 Failed');
+        const badge = last.status === 'SUCCESS' ? '🟢 成功' : (last.status === 'WAF_BLOCKED' ? '🟠 WAF拦截' : '🔴 失败');
         document.getElementById('stat-last-time').textContent = `${timeStr} (${badge})`;
       } else {
-        document.getElementById('stat-last-time').textContent = 'Not scraped yet';
+        document.getElementById('stat-last-time').textContent = '尚未抓取';
       }
     }
   } catch (err) {
@@ -124,7 +156,7 @@ async function loadCategories() {
     if (json.success) {
       const categories = json.data || [];
       categoryPills.innerHTML = `
-        <button class="cat-pill ${state.category === '' ? 'active bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'} px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" data-category="">All</button>
+        <button class="cat-pill ${state.category === '' ? 'active bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'} px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" data-category="">全部品类</button>
       `;
 
       categories.forEach(item => {
@@ -132,11 +164,11 @@ async function loadCategories() {
         const btn = document.createElement('button');
         btn.className = `cat-pill ${activeClass} px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap`;
         btn.dataset.category = item.category;
-        btn.innerHTML = `${item.category} <span class="opacity-60 text-[10px]">(${item.count})</span>`;
+        btn.innerHTML = `${escapeHtml(item.category)} <span class="opacity-60 text-[10px]">(${item.count})</span>`;
         categoryPills.appendChild(btn);
       });
 
-      // Category click handler
+      // Category pill click handler
       categoryPills.querySelectorAll('.cat-pill').forEach(btn => {
         btn.addEventListener('click', () => {
           categoryPills.querySelectorAll('.cat-pill').forEach(b => {
@@ -145,7 +177,7 @@ async function loadCategories() {
           btn.className = 'cat-pill active bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap';
           state.category = btn.dataset.category;
           state.page = 1;
-          loadShops();
+          loadProducts();
         });
       });
     }
@@ -154,13 +186,35 @@ async function loadCategories() {
   }
 }
 
-// Load Shops List
-async function loadShops() {
+// Load Shop Codes dropdown
+async function loadShopCodes() {
   try {
-    shopsGrid.innerHTML = `
-      <div class="col-span-full py-12 text-center text-slate-400">
+    const res = await fetch('/api/shop-codes');
+    const json = await res.json();
+    if (json.success) {
+      const codes = json.data || [];
+      const current = shopSelect.value;
+      shopSelect.innerHTML = `<option value="">全部小铺 (All Shops)</option>`;
+      codes.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.shop_code;
+        opt.textContent = `小铺: ${c.shop_code} (${c.count}件)`;
+        if (c.shop_code === current) opt.selected = true;
+        shopSelect.appendChild(opt);
+      });
+    }
+  } catch (err) {
+    console.error('Failed to load shop codes:', err);
+  }
+}
+
+// Load Products List (Grouped by Category & Sorted by Price Ascending)
+async function loadProducts() {
+  try {
+    productsListView.innerHTML = `
+      <div class="py-16 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
         <span class="inline-block animate-spin text-2xl mb-2">⏳</span>
-        <p class="text-xs">Loading shop records...</p>
+        <p class="text-xs">加载在售商品数据中（价格由低到高）...</p>
       </div>
     `;
 
@@ -168,190 +222,230 @@ async function loadShops() {
       page: state.page,
       limit: state.limit,
       search: state.search,
-      category: state.category
+      category: state.category,
+      shopCode: state.shopCode,
+      inStockOnly: state.inStockOnly ? 'true' : 'false',
+      sortBy: state.sortBy
     });
 
     const res = await fetch(`/api/shops?${params}`);
     const json = await res.json();
 
     if (!json.success || !json.data || json.data.items.length === 0) {
-      shopsGrid.innerHTML = '';
+      productsListView.innerHTML = '';
       emptyState.classList.remove('hidden');
       paginationBar.classList.add('hidden');
       return;
     }
 
     emptyState.classList.add('hidden');
-    renderShops(json.data.items);
+    renderProductsList(json.data.items);
 
     // Update pagination
     state.totalPages = json.data.pagination.totalPages;
-    pageIndicator.textContent = `Page ${state.page} of ${state.totalPages} (${json.data.pagination.total} total)`;
+    pageIndicator.textContent = `第 ${state.page} / ${state.totalPages} 页 (共 ${json.data.pagination.total} 件商品)`;
     btnPrevPage.disabled = state.page <= 1;
     btnNextPage.disabled = state.page >= state.totalPages;
     paginationBar.classList.remove('hidden');
   } catch (err) {
-    console.error('Failed to load shops:', err);
-    shopsGrid.innerHTML = `<div class="col-span-full py-8 text-center text-red-500 text-xs">Failed to load data: ${err.message}</div>`;
+    console.error('Failed to load products:', err);
+    productsListView.innerHTML = `<div class="py-8 text-center text-red-500 text-xs bg-white rounded-xl">加载失败: ${err.message}</div>`;
   }
 }
 
-// Render Shop Cards
-function renderShops(shops) {
-  shopsGrid.innerHTML = '';
+// Render Products as Grouped Category Tables (No Cards!)
+function renderProductsList(items) {
+  productsListView.innerHTML = '';
 
-  shops.forEach(shop => {
-    const card = document.createElement('div');
-    card.className = 'shop-card-item bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col justify-between';
+  // Group items by category
+  const groups = {};
+  items.forEach(item => {
+    const cat = item.category || '未分类专区';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(item);
+  });
 
-    const defaultImg = 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=500&auto=format&fit=crop';
-    const mainImg = (shop.images && shop.images.length > 0) ? shop.images[0] : defaultImg;
+  // Render each category group as a clean list table
+  Object.keys(groups).forEach(catName => {
+    const groupItems = groups[catName];
+    // Each group is already sorted by price_num ASC from database
+    const cardSection = document.createElement('div');
+    cardSection.className = 'bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs';
 
-    card.innerHTML = `
-      <div>
-        <div class="h-44 w-full bg-slate-100 relative overflow-hidden">
-          <img 
-            src="${mainImg}" 
-            alt="${escapeHtml(shop.title)}" 
-            class="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
-            onerror="this.src='${defaultImg}'"
-          />
-          <div class="absolute top-3 left-3">
-            <span class="px-2.5 py-1 bg-white/90 backdrop-blur-xs text-indigo-700 text-[11px] font-semibold rounded-lg shadow-xs">
-              ${escapeHtml(shop.category || 'General')}
-            </span>
-          </div>
-          ${shop.price ? `
-            <div class="absolute bottom-3 right-3 bg-slate-900/80 backdrop-blur-xs text-white text-xs font-bold px-2 py-0.5 rounded-md">
-              ${escapeHtml(shop.price)}
-            </div>
-          ` : ''}
+    cardSection.innerHTML = `
+      <!-- Category Group Header -->
+      <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="text-base">🏷️</span>
+          <h2 class="font-bold text-slate-800 text-sm tracking-tight">${escapeHtml(catName)}</h2>
+          <span class="text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-semibold border border-indigo-100">
+            ${groupItems.length} 件在售
+          </span>
         </div>
-
-        <div class="p-4 sm:p-5">
-          <h2 class="font-bold text-slate-900 text-base leading-snug line-clamp-2 hover:text-indigo-600 transition-colors">
-            ${escapeHtml(shop.title)}
-          </h2>
-          <p class="text-xs text-slate-500 mt-2 line-clamp-3 leading-relaxed">
-            ${escapeHtml(shop.description || 'No description available.')}
-          </p>
-
-          <div class="mt-4 pt-3 border-t border-slate-100 space-y-1.5 text-xs text-slate-600">
-            ${shop.contact ? `
-              <div class="flex items-center gap-1.5 truncate">
-                <span class="text-slate-400">📞</span>
-                <span class="truncate">${escapeHtml(shop.contact)}</span>
-              </div>
-            ` : ''}
-            ${shop.address ? `
-              <div class="flex items-center gap-1.5 truncate">
-                <span class="text-slate-400">📍</span>
-                <span class="truncate">${escapeHtml(shop.address)}</span>
-              </div>
-            ` : ''}
-          </div>
+        <div class="text-[11px] text-slate-500 font-medium flex items-center gap-1">
+          <span>📶 价格从低到高排列</span>
         </div>
       </div>
 
-      <div class="px-4 sm:px-5 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
-        <span class="text-[11px] text-slate-400">
-          ${new Date(shop.updated_at || shop.created_at).toLocaleDateString()}
-        </span>
-        <div class="flex items-center gap-2">
-          ${shop.source_url ? `
-            <a href="${shop.source_url}" target="_blank" class="px-2.5 py-1 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md font-medium transition-colors flex items-center gap-1">
-              <span>Source</span> ↗
-            </a>
-          ` : ''}
-          <button onclick="handleDeleteShop(${shop.id})" class="text-slate-400 hover:text-red-500 p-1 transition-colors" title="Delete">
-            🗑️
-          </button>
-        </div>
+      <!-- Table Content (No cards) -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead>
+            <tr class="bg-slate-50/75 text-slate-500 border-b border-slate-200 text-[11px] font-semibold">
+              <th class="py-3 px-5 w-5/12">商品名称与说明</th>
+              <th class="py-3 px-4 w-2/12 whitespace-nowrap">价格 (低到高)</th>
+              <th class="py-3 px-3 w-1/12 whitespace-nowrap">库存状态</th>
+              <th class="py-3 px-3 w-1/12 whitespace-nowrap">所属小铺</th>
+              <th class="py-3 px-4 w-2/12 whitespace-nowrap">联系 / 购买</th>
+              <th class="py-3 px-4 w-1/12 text-right whitespace-nowrap">操作</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            ${groupItems.map(item => `
+              <tr class="hover:bg-slate-50/80 transition-colors">
+                <!-- Title & Description -->
+                <td class="py-3 px-5 align-top">
+                  <div class="font-bold text-slate-900 text-sm hover:text-indigo-600 transition-colors">
+                    ${escapeHtml(item.title)}
+                  </div>
+                  ${item.description ? `
+                    <div class="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
+                      ${escapeHtml(item.description)}
+                    </div>
+                  ` : ''}
+                </td>
+
+                <!-- Price -->
+                <td class="py-3 px-4 align-top whitespace-nowrap">
+                  <div class="text-sm font-extrabold text-emerald-700">
+                    ${escapeHtml(item.price || (item.price_num ? `¥ ${item.price_num.toFixed(2)}` : '询价'))}
+                  </div>
+                </td>
+
+                <!-- Stock Status -->
+                <td class="py-3 px-3 align-top whitespace-nowrap">
+                  ${item.in_stock ? `
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                      ${escapeHtml(item.stock_text || '有货')}
+                    </span>
+                  ` : `
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                      <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                      缺货
+                    </span>
+                  `}
+                </td>
+
+                <!-- Shop Code -->
+                <td class="py-3 px-3 align-top whitespace-nowrap">
+                  <span class="inline-block px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 font-mono">
+                    ${escapeHtml(item.shop_code || 'wzyp')}
+                  </span>
+                </td>
+
+                <!-- Contact & Buy Link -->
+                <td class="py-3 px-4 align-top text-xs text-slate-600 whitespace-nowrap">
+                  ${item.source_url ? `
+                    <a href="${item.source_url}" target="_blank" class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md font-medium text-xs transition-colors">
+                      <span>直达小铺</span> ↗
+                    </a>
+                  ` : ''}
+                  ${item.contact ? `
+                    <div class="text-[11px] text-slate-400 mt-1 truncate max-w-[140px]" title="${escapeHtml(item.contact)}">
+                      ${escapeHtml(item.contact)}
+                    </div>
+                  ` : ''}
+                </td>
+
+                <!-- Delete Action -->
+                <td class="py-3 px-4 align-top text-right whitespace-nowrap">
+                  <button onclick="handleDeleteShop(${item.id})" class="text-slate-400 hover:text-red-500 p-1 transition-colors text-xs" title="移除此项">
+                    🗑️
+                  </button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
       </div>
     `;
 
-    shopsGrid.appendChild(card);
+    productsListView.appendChild(cardSection);
   });
 }
 
-// Scrape Handler
+// Scrape Handler (Supports multiple shops & interactive mode)
 async function handleScrape({ interactive = false } = {}) {
   if (state.isScraping) return;
 
   state.isScraping = true;
   
   if (interactive) {
-    if (btnInteractive) {
-      btnInteractive.disabled = true;
-      btnInteractive.classList.add('opacity-75', 'cursor-not-allowed');
-      interactiveIcon.textContent = '⏳';
-      interactiveText.textContent = 'Browser Open...';
-    }
-    showToast('🌐 Desktop browser opened! Please complete the slide verification in the pop-up window.');
+    btnInteractive.disabled = true;
+    btnInteractive.classList.add('opacity-75', 'cursor-not-allowed');
+    interactiveIcon.textContent = '⏳';
+    interactiveText.textContent = '浏览器打开中...';
+    showToast('🌐 桌面浏览器已启动！如遇滑块请直接在弹出窗口中完成滑动验证。');
   } else {
     btnScrape.disabled = true;
     btnScrape.classList.add('opacity-75', 'cursor-not-allowed');
     scrapeIcon.textContent = '⏳';
-    scrapeText.textContent = 'Scraping...';
-    showToast('🚀 Initiating scraping job...');
+    scrapeText.textContent = '采集进行中...';
+    showToast('🚀 正在批量抓取配置的小铺商品...');
   }
 
-  const targetUrl = document.getElementById('cfg-target-url')?.value.trim() || 'https://wzyp.cn';
-  const cookie = document.getElementById('cfg-waf-cookie')?.value.trim() || '';
+  const rawShops = cfgTargetShops?.value.trim() || 'https://wzyp.cn/shop/FT7';
+  const cookie = cfgWafCookie?.value.trim() || '';
 
   try {
     const res = await fetch('/api/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: targetUrl, cookie, interactive })
+      body: JSON.stringify({ urls: rawShops, cookie, interactive })
     });
 
     const result = await res.json();
 
     if (result.success) {
-      showToast(`✅ Scrape succeeded! Saved ${result.count} items.`);
+      showToast(`✅ ${result.message}`);
       if (result.cookie) {
-        const cookieInput = document.getElementById('cfg-waf-cookie');
-        if (cookieInput) cookieInput.value = result.cookie;
+        if (cfgWafCookie) cfgWafCookie.value = result.cookie;
         localStorage.setItem('scraper_waf_cookie', result.cookie);
       }
       loadStats();
       loadCategories();
-      loadShops();
+      loadShopCodes();
+      loadProducts();
       hideNotice();
     } else if (result.wafBlocked) {
       showNotice(
         'warning',
-        '⚠️ Target site triggered Alibaba Cloud ESA WAF Challenge',
-        `The target site is protected by anti-bot verification. You can resolve this interactively without leaving the app:<br>
+        '⚠️ 抓取过程中触发了阿里云ESA人机验证保护 (WAF)',
+        `由于目标小铺启用了人机防火墙，建议直接点击下方按钮由系统为您唤起桌面浏览器进行交互式滑动：<br>
         <div class="mt-3 flex flex-wrap items-center gap-2">
           <button onclick="handleInteractiveScrape()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
-            <span>👁️</span> Launch Interactive Verification Browser
+            <span>👁️</span> 立即启动交互式验证抓取窗口
           </button>
-          <a href="${targetUrl}" target="_blank" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium transition-colors">
-            Open in External Browser
-          </a>
         </div>
-        <p class="text-[11px] text-slate-500 mt-2">Clicking "Launch Interactive Verification Browser" will pop up Chrome/Edge on your screen. Simply slide the puzzle, and the system will automatically grab the products and save your session!</p>`
+        <p class="text-[11px] text-slate-500 mt-2">点击后屏幕上会弹出 Chrome/Edge 浏览器窗口，您只需用鼠标拖动滑块，通过后程序将自动接管采集所有小铺商品并保存凭证！</p>`
       );
     } else {
-      showNotice('danger', '❌ Scrape Job Failed', result.message || 'Unknown error');
+      showNotice('danger', '❌ 抓取任务失败', result.message || '未知错误');
     }
   } catch (err) {
-    showNotice('danger', '❌ Scrape Request Error', err.message);
+    showNotice('danger', '❌ 抓取请求发生异常', err.message);
   } finally {
     state.isScraping = false;
     btnScrape.disabled = false;
     btnScrape.classList.remove('opacity-75', 'cursor-not-allowed');
     scrapeIcon.textContent = '🚀';
-    scrapeText.textContent = 'Fast Scrape';
+    scrapeText.textContent = '批量快速抓取';
 
-    if (btnInteractive) {
-      btnInteractive.disabled = false;
-      btnInteractive.classList.remove('opacity-75', 'cursor-not-allowed');
-      interactiveIcon.textContent = '👁️';
-      interactiveText.textContent = 'Interactive Scrape';
-    }
+    btnInteractive.disabled = false;
+    btnInteractive.classList.remove('opacity-75', 'cursor-not-allowed');
+    interactiveIcon.textContent = '👁️';
+    interactiveText.textContent = '交互验证抓取';
     loadStats();
   }
 }
@@ -360,7 +454,7 @@ window.handleInteractiveScrape = function() {
   handleScrape({ interactive: true });
 };
 
-// Seed Sample Data
+// Seed Sample Multi-Shop Data
 async function handleSeed() {
   try {
     const res = await fetch('/api/seed', { method: 'POST' });
@@ -369,95 +463,33 @@ async function handleSeed() {
       showToast(`🎉 ${json.message}`);
       loadStats();
       loadCategories();
-      loadShops();
+      loadShopCodes();
+      loadProducts();
     } else {
-      showToast('❌ Seeding failed: ' + json.error);
+      showToast('❌ 导入演示数据失败: ' + json.error);
     }
   } catch (err) {
-    showToast('❌ Network error: ' + err.message);
+    showToast('❌ 网络错误: ' + err.message);
   }
 }
 
-// Delete Shop
+// Delete Product
 window.handleDeleteShop = async function(id) {
-  if (!confirm('Are you sure you want to delete this shop record?')) return;
+  if (!confirm('确定要从列表中移除该商品记录吗？')) return;
   try {
     const res = await fetch(`/api/shops/${id}`, { method: 'DELETE' });
     const json = await res.json();
     if (json.success) {
-      showToast('🗑️ Shop record deleted');
+      showToast('🗑️ 商品已移除');
       loadStats();
       loadCategories();
-      loadShops();
+      loadShopCodes();
+      loadProducts();
     }
   } catch (err) {
-    showToast('❌ Delete failed: ' + err.message);
+    showToast('❌ 删除失败: ' + err.message);
   }
 };
-
-// Add Shop Manually
-async function handleAddShop() {
-  const title = document.getElementById('add-title').value.trim();
-  const category = document.getElementById('add-category').value.trim();
-  const price = document.getElementById('add-price').value.trim();
-  const contact = document.getElementById('add-contact').value.trim();
-  const address = document.getElementById('add-address').value.trim();
-  const description = document.getElementById('add-desc').value.trim();
-
-  if (!title) {
-    alert('Please enter a shop title');
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/shops', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, category, price, contact, address, description })
-    });
-    const json = await res.json();
-    if (json.success) {
-      showToast('✅ Shop added successfully!');
-      closeModal('modal-add');
-      // Reset form
-      document.getElementById('add-title').value = '';
-      document.getElementById('add-category').value = '';
-      document.getElementById('add-price').value = '';
-      document.getElementById('add-contact').value = '';
-      document.getElementById('add-address').value = '';
-      document.getElementById('add-desc').value = '';
-      loadStats();
-      loadCategories();
-      loadShops();
-    } else {
-      alert('Save failed: ' + json.error);
-    }
-  } catch (err) {
-    alert('Request error: ' + err.message);
-  }
-}
-
-// Save Config
-function saveConfig() {
-  const targetUrl = document.getElementById('cfg-target-url').value.trim();
-  const cookie = document.getElementById('cfg-waf-cookie').value.trim();
-  localStorage.setItem('scraper_target_url', targetUrl);
-  localStorage.setItem('scraper_waf_cookie', cookie);
-  showToast('💾 Settings saved! Applied to future scrape requests.');
-  closeModal('modal-config');
-}
-
-// Restore saved config
-const savedUrl = localStorage.getItem('scraper_target_url');
-const savedCookie = localStorage.getItem('scraper_waf_cookie');
-if (savedUrl) {
-  const el = document.getElementById('cfg-target-url');
-  if (el) el.value = savedUrl;
-}
-if (savedCookie) {
-  const el = document.getElementById('cfg-waf-cookie');
-  if (el) el.value = savedCookie;
-}
 
 // UI Helper: Notice Banner
 function showNotice(type, title, message) {
