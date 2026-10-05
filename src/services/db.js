@@ -19,6 +19,7 @@ export function initDatabase() {
       external_id TEXT UNIQUE,
       title TEXT NOT NULL,
       category TEXT DEFAULT 'General',
+      canonical_category TEXT DEFAULT '',
       description TEXT,
       price TEXT,
       price_num REAL DEFAULT 0,
@@ -32,6 +33,17 @@ export function initDatabase() {
       raw_data TEXT, -- JSON string object
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS category_mappings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      shop_code TEXT NOT NULL,
+      raw_category TEXT NOT NULL,
+      canonical_category TEXT NOT NULL,
+      confidence REAL DEFAULT 1.0,
+      source TEXT DEFAULT 'jev',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(shop_code, raw_category)
     );
 
     CREATE TABLE IF NOT EXISTS scrape_logs (
@@ -60,6 +72,9 @@ export function initDatabase() {
     if (!existingCols.has('shop_code')) {
       db.exec("ALTER TABLE shops ADD COLUMN shop_code TEXT DEFAULT ''");
     }
+    if (!existingCols.has('canonical_category')) {
+      db.exec("ALTER TABLE shops ADD COLUMN canonical_category TEXT DEFAULT ''");
+    }
   } catch (err) {
     console.error('Database migration note:', err.message);
   }
@@ -68,10 +83,12 @@ export function initDatabase() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_shops_external_id ON shops(external_id);
     CREATE INDEX IF NOT EXISTS idx_shops_category ON shops(category);
+    CREATE INDEX IF NOT EXISTS idx_shops_canonical_cat ON shops(canonical_category);
     CREATE INDEX IF NOT EXISTS idx_shops_price_num ON shops(price_num);
     CREATE INDEX IF NOT EXISTS idx_shops_in_stock ON shops(in_stock);
     CREATE INDEX IF NOT EXISTS idx_shops_shop_code ON shops(shop_code);
     CREATE INDEX IF NOT EXISTS idx_shops_created_at ON shops(created_at);
+    CREATE INDEX IF NOT EXISTS idx_cat_mappings_shop_raw ON category_mappings(shop_code, raw_category);
   `);
 }
 
@@ -96,8 +113,8 @@ export const shopService = {
     }
 
     if (category && category.trim() && category !== 'All' && category !== '全部') {
-      conditions.push('category = ?');
-      params.push(category.trim());
+      conditions.push("(canonical_category = ? OR ((canonical_category IS NULL OR canonical_category = '') AND category = ?))");
+      params.push(category.trim(), category.trim());
     }
 
     if (shopCode && shopCode.trim() && shopCode !== 'All' && shopCode !== '全部') {
@@ -113,10 +130,11 @@ export const shopService = {
     const countRes = countStmt.all(...params);
     const total = countRes[0]?.total || 0;
 
-    // Sorting: Grouped by category, sorted by price from low to high
-    let orderByClause = 'ORDER BY category ASC, price_num ASC, id DESC';
+    // Sorting: Grouped by canonical category, sorted by price from low to high
+    const catGroupExpr = "COALESCE(NULLIF(canonical_category, ''), category)";
+    let orderByClause = `ORDER BY ${catGroupExpr} ASC, price_num ASC, id DESC`;
     if (sortBy === 'price_desc') {
-      orderByClause = 'ORDER BY category ASC, price_num DESC, id DESC';
+      orderByClause = `ORDER BY ${catGroupExpr} ASC, price_num DESC, id DESC`;
     } else if (sortBy === 'time_desc') {
       orderByClause = 'ORDER BY updated_at DESC, id DESC';
     }
@@ -174,14 +192,25 @@ export const shopService = {
     const inStock = shop.inStock === undefined ? 1 : (shop.inStock ? 1 : 0);
     const stockText = shop.stockText || (inStock ? '有货' : '缺货');
     const shopCode = shop.shopCode || '';
+    const rawCategory = shop.category || 'General';
+
+    // Auto resolve canonical category if not explicitly passed
+    let canonicalCategory = shop.canonicalCategory || '';
+    if (!canonicalCategory && shopCode && rawCategory) {
+      const mapping = this.getCategoryMapping(shopCode, rawCategory);
+      if (mapping) {
+        canonicalCategory = mapping.canonical_category;
+      }
+    }
 
     const stmt = db.prepare(`
       INSERT INTO shops (
-        external_id, title, category, description, price, price_num, in_stock, stock_text, shop_code, contact, address, source_url, images, raw_data, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        external_id, title, category, canonical_category, description, price, price_num, in_stock, stock_text, shop_code, contact, address, source_url, images, raw_data, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(external_id) DO UPDATE SET
         title = excluded.title,
         category = excluded.category,
+        canonical_category = CASE WHEN excluded.canonical_category != '' THEN excluded.canonical_category ELSE shops.canonical_category END,
         description = excluded.description,
         price = excluded.price,
         price_num = excluded.price_num,
@@ -199,7 +228,8 @@ export const shopService = {
     stmt.run(
       externalId,
       shop.title || 'Untitled Product',
-      shop.category || 'General',
+      rawCategory,
+      canonicalCategory,
       shop.description || '',
       shop.price || '',
       priceNum,
@@ -234,10 +264,12 @@ export const shopService = {
 
   getCategories() {
     const stmt = db.prepare(`
-      SELECT DISTINCT category, COUNT(*) as count 
+      SELECT 
+        COALESCE(NULLIF(canonical_category, ''), category) AS category,
+        COUNT(*) as count 
       FROM shops 
-      WHERE category IS NOT NULL AND category != '' 
-      GROUP BY category 
+      WHERE (category IS NOT NULL AND category != '') OR (canonical_category IS NOT NULL AND canonical_category != '')
+      GROUP BY COALESCE(NULLIF(canonical_category, ''), category) 
       ORDER BY count DESC
     `);
     return stmt.all();
@@ -254,6 +286,66 @@ export const shopService = {
     return stmt.all();
   },
 
+  getDistinctShopCategories() {
+    const stmt = db.prepare(`
+      SELECT 
+        s.shop_code, 
+        s.category as raw_category,
+        COALESCE(m.canonical_category, s.canonical_category, '') as canonical_category,
+        COALESCE(m.confidence, 1.0) as confidence,
+        COALESCE(m.source, 'none') as source,
+        COUNT(s.id) as count
+      FROM shops s
+      LEFT JOIN category_mappings m 
+        ON s.shop_code = m.shop_code AND s.category = m.raw_category
+      WHERE s.category IS NOT NULL AND s.category != ''
+      GROUP BY s.shop_code, s.category
+      ORDER BY s.shop_code ASC, count DESC
+    `);
+    return stmt.all();
+  },
+
+  getCategoryMapping(shopCode, rawCategory) {
+    const stmt = db.prepare('SELECT * FROM category_mappings WHERE shop_code = ? AND raw_category = ?');
+    return stmt.get(shopCode, rawCategory) || null;
+  },
+
+  getAllCategoryMappings() {
+    const stmt = db.prepare('SELECT * FROM category_mappings ORDER BY shop_code ASC, raw_category ASC');
+    return stmt.all();
+  },
+
+  saveCategoryMapping({ shopCode, rawCategory, canonicalCategory, confidence = 1.0, source = 'jev' }) {
+    const stmt = db.prepare(`
+      INSERT INTO category_mappings (shop_code, raw_category, canonical_category, confidence, source, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(shop_code, raw_category) DO UPDATE SET
+        canonical_category = excluded.canonical_category,
+        confidence = excluded.confidence,
+        source = excluded.source,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+    stmt.run(shopCode, rawCategory, canonicalCategory, confidence, source);
+
+    // Update all matching products in shops table
+    const updateStmt = db.prepare(`
+      UPDATE shops 
+      SET canonical_category = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE shop_code = ? AND category = ?
+    `);
+    const info = updateStmt.run(canonicalCategory, shopCode, rawCategory);
+    return info.changes;
+  },
+
+  getCategorySampleTitles(shopCode, rawCategory, limit = 8) {
+    const stmt = db.prepare(`
+      SELECT title, price FROM shops 
+      WHERE shop_code = ? AND category = ? 
+      ORDER BY in_stock DESC, id ASC LIMIT ?
+    `);
+    return stmt.all(shopCode, rawCategory, limit);
+  },
+
   getStats() {
     const totalStmt = db.prepare('SELECT COUNT(*) as total FROM shops');
     const total = totalStmt.get()?.total || 0;
@@ -261,7 +353,11 @@ export const shopService = {
     const inStockStmt = db.prepare('SELECT COUNT(*) as total FROM shops WHERE in_stock = 1');
     const inStockCount = inStockStmt.get()?.total || 0;
 
-    const catStmt = db.prepare('SELECT COUNT(DISTINCT category) as count FROM shops');
+    const catStmt = db.prepare(`
+      SELECT COUNT(DISTINCT COALESCE(NULLIF(canonical_category, ''), category)) as count 
+      FROM shops 
+      WHERE category != '' OR canonical_category != ''
+    `);
     const categoriesCount = catStmt.get()?.count || 0;
 
     const shopCountStmt = db.prepare("SELECT COUNT(DISTINCT shop_code) as count FROM shops WHERE shop_code != ''");

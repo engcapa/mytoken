@@ -811,6 +811,14 @@ export class ScraperService {
       }
     }
 
+    if (totalSaved > 0) {
+      try {
+        await jevService.harmonizeAllCategories(shopService);
+      } catch (err) {
+        console.warn('[Scraper] Auto harmonization warning:', err.message);
+      }
+    }
+
     const message = `多小铺批量抓取完成！共处理 ${targetList.length} 个小铺，成功入库 ${totalSaved} 件商品。`;
     return {
       success: totalSaved > 0 || !anyWaf,
@@ -857,6 +865,14 @@ export class ScraperService {
           itemsScraped: 0,
           message: `[${shopCode}] 交互抓取未能提取到商品: ${browserRes.message || '未知原因'}`
         });
+      }
+    }
+
+    if (totalSaved > 0) {
+      try {
+        await jevService.harmonizeAllCategories(shopService);
+      } catch (err) {
+        console.warn('[Scraper] Auto harmonization warning:', err.message);
       }
     }
 

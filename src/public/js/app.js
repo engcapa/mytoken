@@ -39,8 +39,12 @@ const noticeClose = document.getElementById('notice-close');
 // Jev & Proxy DOM Elements
 const tabBtnShops = document.getElementById('tab-btn-shops');
 const tabBtnJev = document.getElementById('tab-btn-jev');
+const tabBtnMappings = document.getElementById('tab-btn-mappings');
 const tabContentShops = document.getElementById('tab-content-shops');
 const tabContentJev = document.getElementById('tab-content-jev');
+const tabContentMappings = document.getElementById('tab-content-mappings');
+const btnHarmonize = document.getElementById('btn-harmonize');
+const btnModalHarmonize = document.getElementById('btn-modal-harmonize');
 const cfgJevEnabled = document.getElementById('cfg-jev-enabled');
 const cfgJevKey = document.getElementById('cfg-jev-key');
 const cfgJevBaseUrl = document.getElementById('cfg-jev-base-url');
@@ -108,21 +112,31 @@ function bindEvents() {
   btnScrape.addEventListener('click', () => handleScrape({ interactive: false }));
   btnInteractive.addEventListener('click', () => handleScrape({ interactive: true }));
 
+  // Harmonize categories action
+  if (btnHarmonize) {
+    btnHarmonize.addEventListener('click', () => handleHarmonizeCategories({ forceAll: true }));
+  }
+  if (btnModalHarmonize) {
+    btnModalHarmonize.addEventListener('click', () => handleHarmonizeCategories({ forceAll: true }));
+  }
+
   // Seed sample action
   btnSeed.addEventListener('click', handleSeed);
 
   // Config Modal
-  btnConfig.addEventListener('click', () => openModal('modal-config'));
+  btnConfig.addEventListener('click', () => {
+    openModal('modal-config');
+    loadCategoryMappings();
+  });
   btnSaveConfig.addEventListener('click', saveConfig);
 
   // Notice close
   noticeClose.addEventListener('click', () => noticeBanner.classList.add('hidden'));
 
-  // Jev Settings Tabs
-  if (tabBtnShops && tabBtnJev) {
-    tabBtnShops.addEventListener('click', () => switchSettingsTab('shops'));
-    tabBtnJev.addEventListener('click', () => switchSettingsTab('jev'));
-  }
+  // Settings Tabs
+  if (tabBtnShops) tabBtnShops.addEventListener('click', () => switchSettingsTab('shops'));
+  if (tabBtnJev) tabBtnJev.addEventListener('click', () => switchSettingsTab('jev'));
+  if (tabBtnMappings) tabBtnMappings.addEventListener('click', () => switchSettingsTab('mappings'));
 
   // Toggle API key visibility
   if (btnToggleKeyVis && cfgJevKey) {
@@ -145,16 +159,25 @@ function bindEvents() {
 
 // Switch modal tabs
 function switchSettingsTab(tabName) {
-  if (tabName === 'shops') {
-    tabBtnShops.className = 'tab-btn active px-4 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors';
-    tabBtnJev.className = 'tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors';
-    tabContentShops.classList.remove('hidden');
-    tabContentJev.classList.add('hidden');
-  } else {
-    tabBtnJev.className = 'tab-btn active px-4 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors';
-    tabBtnShops.className = 'tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors';
-    tabContentJev.classList.remove('hidden');
-    tabContentShops.classList.add('hidden');
+  const tabs = [
+    { name: 'shops', btn: tabBtnShops, content: tabContentShops },
+    { name: 'jev', btn: tabBtnJev, content: tabContentJev },
+    { name: 'mappings', btn: tabBtnMappings, content: tabContentMappings }
+  ];
+
+  tabs.forEach(t => {
+    if (!t.btn || !t.content) return;
+    if (t.name === tabName) {
+      t.btn.className = 'tab-btn active px-4 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors';
+      t.content.classList.remove('hidden');
+    } else {
+      t.btn.className = 'tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors';
+      t.content.classList.add('hidden');
+    }
+  });
+
+  if (tabName === 'mappings') {
+    loadCategoryMappings();
   }
 }
 
@@ -270,6 +293,104 @@ async function handleTestJev() {
   } finally {
     btnTestJev.disabled = false;
     testJevText.textContent = '测试 TypeSafe Jev 连通性';
+  }
+}
+
+// Jev Category Harmonization Action
+async function handleHarmonizeCategories({ forceAll = false } = {}) {
+  const harmonizeIcon = document.getElementById('harmonize-icon');
+  const harmonizeText = document.getElementById('harmonize-text');
+  const modalHarmonizeIcon = document.getElementById('modal-harmonize-icon');
+  const modalHarmonizeText = document.getElementById('modal-harmonize-text');
+
+  if (btnHarmonize) btnHarmonize.disabled = true;
+  if (btnModalHarmonize) btnModalHarmonize.disabled = true;
+  if (harmonizeIcon) harmonizeIcon.textContent = '⏳';
+  if (harmonizeText) harmonizeText.textContent = 'Jev 归类中...';
+  if (modalHarmonizeIcon) modalHarmonizeIcon.textContent = '⏳';
+  if (modalHarmonizeText) modalHarmonizeText.textContent = '正在通过 Jev 模型决策中...';
+
+  showToast('🤖 正在通过 TypeSafe Jev 模型计算分类相似度并归一化...');
+
+  try {
+    const res = await fetch('/api/jev/harmonize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ forceAll })
+    });
+    const json = await res.json();
+    if (json.success) {
+      showToast(`🎉 ${json.message || 'Jev 智能统一分类完成！'}`);
+      await Promise.all([
+        loadStats(),
+        loadCategories(),
+        loadShopCodes(),
+        loadProducts(),
+        loadCategoryMappings()
+      ]);
+    } else {
+      showToast('❌ 统一分类失败: ' + (json.error || '未知错误'));
+    }
+  } catch (err) {
+    showToast('❌ 请求失败: ' + err.message);
+  } finally {
+    if (btnHarmonize) btnHarmonize.disabled = false;
+    if (btnModalHarmonize) btnModalHarmonize.disabled = false;
+    if (harmonizeIcon) harmonizeIcon.textContent = '🤖';
+    if (harmonizeText) harmonizeText.textContent = 'Jev 智能统一分类';
+    if (modalHarmonizeIcon) modalHarmonizeIcon.textContent = '🤖';
+    if (modalHarmonizeText) modalHarmonizeText.textContent = '重新执行 Jev 智能归类';
+  }
+}
+
+// Load category mappings for settings modal
+async function loadCategoryMappings() {
+  const tbody = document.getElementById('mappings-table-body');
+  if (!tbody) return;
+
+  try {
+    tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-center text-slate-400">正在加载最新分类映射...</td></tr>`;
+    const res = await fetch('/api/jev/categories');
+    const json = await res.json();
+    if (json.success && json.data) {
+      const distinct = json.data.distinctList || [];
+      if (distinct.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-center text-slate-400">暂无小铺分类数据，请先抓取商品。</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = distinct.map(item => `
+        <tr class="hover:bg-slate-50 transition-colors">
+          <td class="py-2.5 px-3">
+            <span class="font-mono font-bold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded text-[11px] border border-purple-100">
+              ${escapeHtml(item.shop_code || 'wzyp')}
+            </span>
+          </td>
+          <td class="py-2.5 px-3 font-medium text-slate-800">
+            ${escapeHtml(item.raw_category)}
+          </td>
+          <td class="py-2.5 px-3">
+            ${item.canonical_category ? `
+              <span class="inline-flex items-center gap-1 font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded text-[11px]">
+                <span>🏷️</span>
+                <span>${escapeHtml(item.canonical_category)}</span>
+              </span>
+            ` : `
+              <span class="text-amber-600 bg-amber-50 px-2 py-0.5 rounded text-[11px]">未归类</span>
+            `}
+          </td>
+          <td class="py-2.5 px-2 text-[11px] text-slate-500 font-mono">
+            ${item.confidence ? `${Math.round(item.confidence * 100)}%` : '-'}
+            <span class="text-[10px] text-slate-400">(${escapeHtml(item.source || 'jev')})</span>
+          </td>
+          <td class="py-2.5 px-2 text-right pr-3 font-semibold text-slate-700">
+            ${item.count} 件
+          </td>
+        </tr>
+      `).join('');
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-center text-red-500">加载映射失败: ${err.message}</td></tr>`;
   }
 }
 
@@ -409,10 +530,10 @@ async function loadProducts() {
 function renderProductsList(items) {
   productsListView.innerHTML = '';
 
-  // Group items by category
+  // Group items by canonical category (fallback to raw category)
   const groups = {};
   items.forEach(item => {
-    const cat = item.category || '未分类专区';
+    const cat = item.canonical_category || item.category || '未分类专区';
     if (!groups[cat]) groups[cat] = [];
     groups[cat].push(item);
   });
@@ -431,7 +552,7 @@ function renderProductsList(items) {
           <span class="text-base">🏷️</span>
           <h2 class="font-bold text-slate-800 text-sm tracking-tight">${escapeHtml(catName)}</h2>
           <span class="text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-semibold border border-indigo-100">
-            ${groupItems.length} 件在售
+            ${groupItems.length} 件在售 &bull; 跨小铺比价
           </span>
         </div>
         <div class="text-[11px] text-slate-500 font-medium flex items-center gap-1">
@@ -460,6 +581,18 @@ function renderProductsList(items) {
                   <a href="${item.source_url || '#'}" target="_blank" class="font-bold text-slate-900 text-sm hover:text-indigo-600 transition-colors inline-block leading-snug" title="在新窗口打开具体商品详情">
                     ${escapeHtml(item.title)}
                   </a>
+                  <div class="flex items-center gap-1.5 mt-1 flex-wrap">
+                    ${item.category ? `
+                      <span class="inline-flex items-center text-[10px] text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded font-normal" title="小铺商户原始分类: ${escapeHtml(item.category)}">
+                        商户原类: ${escapeHtml(item.category)}
+                      </span>
+                    ` : ''}
+                    ${item.canonical_category ? `
+                      <span class="inline-flex items-center text-[10px] text-purple-600 bg-purple-50 border border-purple-100 px-1.5 py-0.5 rounded font-medium" title="经 Jev 语义决策模型智能归一化">
+                        🤖 Jev智能归类
+                      </span>
+                    ` : ''}
+                  </div>
                   ${item.description ? `
                     <div class="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
                       ${escapeHtml(item.description)}

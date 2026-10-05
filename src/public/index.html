@@ -28,6 +28,10 @@
         <button id="btn-config" class="px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5" title="配置多个小铺链接与Cookie">
           <span>⚙️</span> 小铺管理设置
         </button>
+        <button id="btn-harmonize" class="px-3 py-1.5 text-xs sm:text-sm font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg transition-all flex items-center gap-1.5 shadow-2xs" title="使用 Jev 决策模型统一多店铺分类">
+          <span id="harmonize-icon">🤖</span>
+          <span id="harmonize-text">Jev 智能统一分类</span>
+        </button>
         <button id="btn-interactive" class="px-3 py-1.5 text-xs sm:text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-all flex items-center gap-1.5" title="弹出桌面浏览器手动完成验证码">
           <span id="interactive-icon">👁️</span>
           <span id="interactive-text">交互验证抓取</span>
@@ -170,6 +174,7 @@
       <div class="flex border-b border-slate-200 mt-3 text-xs font-semibold">
         <button id="tab-btn-shops" class="tab-btn active px-4 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors">🏪 小铺与凭证设置</button>
         <button id="tab-btn-jev" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors">🤖 TypeSafe Jev 模型与代理</button>
+        <button id="tab-btn-mappings" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors">🏷️ 统一分类映射</button>
       </div>
 
       <div class="overflow-y-auto flex-1 py-4 pr-1 space-y-4">
@@ -255,6 +260,36 @@
               <span id="test-jev-text">测试 TypeSafe Jev 连通性</span>
             </button>
             <div id="test-jev-result" class="hidden mt-2 p-2 rounded-lg text-[11px]"></div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Jev Canonical Category Mappings -->
+        <div id="tab-content-mappings" class="hidden space-y-4">
+          <div class="p-3 bg-purple-50/70 border border-purple-100 rounded-xl text-xs text-purple-900 leading-relaxed">
+            <strong>🏷️ Jev 智能分类映射表</strong>：将各小铺不规则或非标准的原始分类，通过语义相似度聚类为统一的标准大类，实现跨小铺精准比价。
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-slate-500 font-medium">当前各小铺分类映射一览</span>
+            <button type="button" id="btn-modal-harmonize" class="px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors flex items-center gap-1 shadow-xs">
+              <span id="modal-harmonize-icon">🤖</span>
+              <span id="modal-harmonize-text">重新执行 Jev 智能归类</span>
+            </button>
+          </div>
+          <div class="overflow-x-auto border border-slate-200 rounded-xl bg-slate-50/50">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="bg-slate-100/75 text-slate-500 border-b border-slate-200 text-[11px] font-semibold">
+                  <th class="py-2.5 px-3">小铺代号</th>
+                  <th class="py-2.5 px-3">原始分类</th>
+                  <th class="py-2.5 px-3">➔ Jev 统一分类</th>
+                  <th class="py-2.5 px-2">置信度</th>
+                  <th class="py-2.5 px-2 text-right pr-3">商品数</th>
+                </tr>
+              </thead>
+              <tbody id="mappings-table-body" class="divide-y divide-slate-100 bg-white">
+                <tr><td colspan="5" class="py-4 text-center text-slate-400">加载映射数据中...</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

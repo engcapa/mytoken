@@ -199,4 +199,65 @@ router.post('/jev/test', async (req, res) => {
   }
 });
 
+// POST /api/jev/harmonize - trigger Jev model category harmonization across all shops
+router.post('/jev/harmonize', async (req, res) => {
+  try {
+    const { forceAll = false } = req.body || {};
+    const result = await jevService.harmonizeAllCategories(shopService, { forceAll: Boolean(forceAll) });
+    const categories = shopService.getCategories();
+    res.json({
+      success: true,
+      message: `Jev 智能统一分类已完成！共识别 ${result.totalCategories} 个小铺原始分类，更新 ${result.updatedCount} 条映射。`,
+      data: {
+        ...result,
+        categories
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/jev/categories - get current category mappings & distinct categories
+router.get('/jev/categories', (req, res) => {
+  try {
+    const categories = shopService.getCategories();
+    const distinctList = shopService.getDistinctShopCategories();
+    const mappings = shopService.getAllCategoryMappings();
+    res.json({
+      success: true,
+      data: {
+        categories,
+        distinctList,
+        mappings
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/jev/categories/override - manually override a category mapping
+router.post('/jev/categories/override', (req, res) => {
+  try {
+    const { shopCode, rawCategory, canonicalCategory } = req.body || {};
+    if (!shopCode || !rawCategory || !canonicalCategory) {
+      return res.status(400).json({ success: false, error: 'shopCode, rawCategory and canonicalCategory are required' });
+    }
+    const updatedCount = shopService.saveCategoryMapping({
+      shopCode: shopCode.trim(),
+      rawCategory: rawCategory.trim(),
+      canonicalCategory: canonicalCategory.trim(),
+      confidence: 1.0,
+      source: 'manual'
+    });
+    res.json({
+      success: true,
+      message: `已成功将 [${shopCode}] "${rawCategory}" 映射为 "${canonicalCategory}"，同步更新 ${updatedCount} 件商品！`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;

@@ -296,6 +296,178 @@ export class JevService {
       return false;
     }
   }
+
+  /**
+   * Harmonize and normalize a merchant's shop category into a standardized canonical category
+   * Uses Jev System One choice decision with fallback heuristic
+   *
+   * @param {Object} params
+   * @param {string} params.shopCode - Shop code (e.g. 'FT7')
+   * @param {string} params.rawCategory - Merchant's raw category (e.g. 'G Plus')
+   * @param {Array<string>} [params.sampleTitles] - Array of sample product titles
+   * @param {Object} [params.customCategories] - Custom canonical categories map
+   */
+  async normalizeCategory({ shopCode = '', rawCategory = '', sampleTitles = [], customCategories = null }) {
+    const categoriesMap = customCategories || DEFAULT_CANONICAL_CATEGORIES;
+    const cleanRaw = (rawCategory || '').trim();
+    if (!cleanRaw) {
+      return { canonicalCategory: '网络与综合服务', confidence: 1.0, source: 'fallback' };
+    }
+
+    // If Jev is not enabled or no apiKey configured, fallback to heuristic rules
+    if (!this.enabled || !this.apiKey) {
+      const fallbackCat = heuristicCategorize(cleanRaw, sampleTitles);
+      return {
+        canonicalCategory: fallbackCat,
+        confidence: 0.85,
+        source: 'heuristic'
+      };
+    }
+
+    const titlesList = sampleTitles.length > 0 
+      ? sampleTitles.map((t, idx) => `  ${idx + 1}. ${t}`).join('\n')
+      : '  (暂无样本标题)';
+
+    const state = `E-commerce Category Harmonization Task:\n` +
+      `Platform: wzyp.cn Multi-Shop Showcase\n` +
+      `Shop Code: ${shopCode || 'Unknown'}\n` +
+      `Merchant Raw Category: "${cleanRaw}"\n` +
+      `Sample Product Titles:\n${titlesList}`;
+
+    try {
+      const result = await this.callSystemOne({
+        state,
+        questions: {
+          canonical_category: {
+            type: 'choice',
+            instructions: 'Which standard canonical category best describes this shop category? Follow these guidelines: 1) Give primary priority to the Category Name: if name contains "邮箱" or "mail" -> "邮箱与账号体系"; if name contains "接码" or "接马" -> "手机接码与验证"; if name is "G Plus", "G K12 Team", or "OpenAI" -> "ChatGPT / OpenAI"; if name contains "谷歌" or "Gemini" -> "Google Gemini"; if name contains "Claude" or "grok" -> "Anthropic Claude"; if name contains "中转" -> "API 中转与算力". 2) Only when the Category Name is generic (like "其他|各种类型") use the sample product titles to decide.',
+            criteria: categoriesMap
+          }
+        }
+      });
+
+      const choice = result.answers?.canonical_category?.choice;
+      const confidence = result.answers?.canonical_category?.confidence || 0.9;
+
+      if (choice && categoriesMap[choice]) {
+        return {
+          canonicalCategory: choice,
+          confidence,
+          source: 'jev'
+        };
+      }
+
+      // Fallback if choice didn't match
+      const fallbackCat = heuristicCategorize(cleanRaw, sampleTitles);
+      return {
+        canonicalCategory: fallbackCat,
+        confidence: 0.8,
+        source: 'heuristic_fallback'
+      };
+    } catch (err) {
+      console.warn(`[JevService] normalizeCategory error for [${shopCode}] "${cleanRaw}":`, err.message);
+      const fallbackCat = heuristicCategorize(cleanRaw, sampleTitles);
+      return {
+        canonicalCategory: fallbackCat,
+        confidence: 0.75,
+        source: 'heuristic_error_fallback'
+      };
+    }
+  }
+
+  /**
+   * Harmonize all categories across all shops in database
+   *
+   * @param {Object} shopService - Database shopService instance
+   * @param {Object} options
+   * @param {boolean} [options.forceAll=false] - Whether to re-classify already mapped categories
+   */
+  async harmonizeAllCategories(shopService, { forceAll = false } = {}) {
+    const distinctCategories = shopService.getDistinctShopCategories();
+    const results = [];
+    let updatedCount = 0;
+
+    for (const item of distinctCategories) {
+      const { shop_code, raw_category, canonical_category } = item;
+      
+      // If already mapped and not forcing re-classification, keep existing
+      if (!forceAll && canonical_category) {
+        results.push({
+          shopCode: shop_code,
+          rawCategory: raw_category,
+          canonicalCategory: canonical_category,
+          source: item.source || 'cached',
+          confidence: item.confidence || 1.0,
+          updated: false
+        });
+        continue;
+      }
+
+      // Fetch sample titles for context
+      const sampleRows = shopService.getCategorySampleTitles(shop_code, raw_category, 5);
+      const sampleTitles = sampleRows.map(r => r.title);
+
+      const decision = await this.normalizeCategory({
+        shopCode: shop_code,
+        rawCategory: raw_category,
+        sampleTitles
+      });
+
+      // Save mapping to database and update shops
+      shopService.saveCategoryMapping({
+        shopCode: shop_code,
+        rawCategory: raw_category,
+        canonicalCategory: decision.canonicalCategory,
+        confidence: decision.confidence,
+        source: decision.source
+      });
+
+      updatedCount++;
+      results.push({
+        shopCode: shop_code,
+        rawCategory: raw_category,
+        canonicalCategory: decision.canonicalCategory,
+        source: decision.source,
+        confidence: decision.confidence,
+        updated: true
+      });
+    }
+
+    return {
+      totalCategories: distinctCategories.length,
+      updatedCount,
+      mappings: results
+    };
+  }
+}
+
+/**
+ * Standard Canonical Categories for AI Token & Digital Goods
+ */
+export const DEFAULT_CANONICAL_CATEGORIES = {
+  'ChatGPT / OpenAI': 'ChatGPT Plus、OpenAI账号、GPT-4o、G Plus、Plus代充、Team团队会员、K12等OpenAI官方账户与订阅',
+  'Anthropic Claude': 'Claude 3.5、Sonnet、Opus、Claude Pro、Team、速刷号及相关成品号与充值 (含同分类下的Grok)',
+  'Google Gemini': '谷歌Gemini、Gemini 1.5 Pro、Gemini Advanced、Google One 2TB/5TB、反重力Pro成品号与谷歌账户',
+  'API 中转与算力': '大模型中转站、API Key、Token额度、OneAPI、NewAPI、DeepSeek等算力与中转兑换',
+  '手机接码与验证': '手机接码、接马、Codex接马/接码、短信验证码、海外实体手机卡代收验证码',
+  '邮箱与账号体系': 'Gmail邮箱、Outlook、Hotmail、微软邮箱、苹果ID及基础账号',
+  'AI 工具与多媒体': 'Grok、X Premium、Midjourney、Suno音乐、Cursor、多媒体与独立模型',
+  '网络与综合服务': '节点加速、虚拟信用卡、工具卡密、综合杂项'
+};
+
+/**
+ * Heuristic fallback categorizer
+ */
+export function heuristicCategorize(rawCategory = '', sampleTitles = []) {
+  const combined = (rawCategory + ' ' + sampleTitles.join(' ')).toLowerCase();
+  if (/gpt|chatgpt|openai|g plus|plus|k12|team/.test(combined)) return 'ChatGPT / OpenAI';
+  if (/claude|sonnet|opus|anthropic/.test(combined)) return 'Anthropic Claude';
+  if (/gemini|谷歌|google|one 2t/.test(combined)) return 'Google Gemini';
+  if (/中转|api|token|算力|deepseek|glm|key/.test(combined)) return 'API 中转与算力';
+  if (/接码|接马|短信|手机号|sim/.test(combined)) return '手机接码与验证';
+  if (/邮箱|mail|gmail|outlook|hotmail|apple id|苹果/.test(combined)) return '邮箱与账号体系';
+  if (/grok|midjourney|suno|cursor|video|视频|绘画/.test(combined)) return 'AI 工具与多媒体';
+  return '网络与综合服务';
 }
 
 export const jevService = new JevService();

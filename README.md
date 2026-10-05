@@ -127,6 +127,19 @@ Our application integrates Jev via `src/services/jev.js`:
 }
 ```
 
+### 4. Cross-Shop Category Harmonization via Jev
+Different shops on `wzyp.cn` use inconsistent names, abbreviations, or typos for identical products:
+- Shop `FT7`: `"G Plus"`, `"G Plus带质保"`, `"G K12 Team"`
+- Shop `G062JE24`: `"OpenAI Plus 网页成品"`
+- Shop `FT7`: `"谷歌 | Gemini"`
+- Shop `G062JE24`: `"Gemini Pro 成品账户"`
+
+Without normalization, users cannot compare prices across shops. Using Jev's `choice` decision API, our system analyzes both the raw category name and representative product titles:
+1. **Semantic Clustering**: Maps disparate merchant categories into standardized canonical categories (e.g. `ChatGPT / OpenAI`, `Anthropic Claude`, `Google Gemini`, `API 中转与算力`, `手机接码与验证`, `邮箱与账号体系`).
+2. **Persistent Caching**: Category decisions are saved to the `category_mappings` SQLite table, avoiding redundant external API calls during ongoing scrapes.
+3. **Cross-Shop Price Comparison**: In the dashboard, products from different shops are grouped under unified canonical categories, ordered strictly from lowest price to highest price with individual "直达商品 ↗" links.
+4. **On-Demand & Automatic Harmonization**: Runs automatically during scraping, or triggered on-demand via the dashboard's **"🤖 Jev 智能统一分类"** button or REST endpoint `POST /api/jev/harmonize`.
+
 ---
 
 ## 🚀 Getting Started
