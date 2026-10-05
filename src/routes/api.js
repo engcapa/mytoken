@@ -275,6 +275,8 @@ router.get('/ip-monitor', (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
 // GET /api/system/antiban - get current anti-ban & proxy settings
 router.get('/system/antiban', (req, res) => {
   res.json({
