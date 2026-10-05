@@ -1,29 +1,113 @@
-# Dependencies
+# ==========================================
+# Dependencies & Package Managers
+# ==========================================
 node_modules/
 package-lock.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
 
-# Environment variables
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
 .env
 .env.local
 .env.*.local
+*.env
+*.pem
+*.key
+*.cert
+*.crt
+credentials.json
+.credentials
 
-# Database & local data
+# ==========================================
+# Database & Runtime Data
+# ==========================================
 data/*.db
 data/*.db-journal
+data/*.db-wal
+data/*.db-shm
 data/*.sqlite
 data/*.sqlite3
 data/*.json
 !data/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
-# Logs
+# ==========================================
+# Logs & Process Outputs
+# ==========================================
 logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+*.pid
+*.seed
+*.pid.lock
 
-# OS & Editor
-.DS_Store
-Thumbs.db
-.vscode/
+# ==========================================
+# Build, Distribution & Cache
+# ==========================================
+dist/
+build/
+out/
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+
+# ==========================================
+# Testing & Code Coverage
+# ==========================================
+coverage/
+.nyc_output/
+*.lcov
+
+# ==========================================
+# IDEs & Code Editors
+# ==========================================
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
+*~
+
+# ==========================================
+# Operating System Artifacts
+# ==========================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ==========================================
+# Temporary & Scratch Files
+# ==========================================
+tmp/
+temp/
+.temp/
+scratch/
