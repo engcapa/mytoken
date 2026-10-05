@@ -1,0 +1,27 @@
+{
+  "name": "wzyp-shop-scraper",
+  "version": "1.0.0",
+  "description": "A Node.js web app for scraping, saving, and displaying shop information from wzyp.cn and other sources",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "scrape": "node src/scripts/scrape.js"
+  },
+  "keywords": [
+    "crawler",
+    "scraper",
+    "wzyp",
+    "express",
+    "sqlite"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.20.0",
+    "cheerio": "^1.2.0",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1"
+  }
+}

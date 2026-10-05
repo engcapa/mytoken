@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shop Scraper & Showcase</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans">
+
+  <!-- Top Navigation -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <span class="text-2xl">🏪</span>
+        <div>
+          <h1 class="text-lg font-bold text-slate-900 leading-tight">Shop Scraper & Showcase</h1>
+          <p class="text-xs text-slate-500">Source: <a href="https://wzyp.cn" target="_blank" class="text-indigo-600 hover:underline">wzyp.cn</a> and external sites</p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-2 sm:space-x-3">
+        <button id="btn-seed" class="px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5">
+          <span>📦</span> Seed Demo Data
+        </button>
+        <button id="btn-config" class="px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5">
+          <span>⚙️</span> Settings
+        </button>
+        <button id="btn-scrape" class="px-4 py-1.5 text-xs sm:text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm hover:shadow transition-all flex items-center gap-1.5">
+          <span id="scrape-icon">🚀</span>
+          <span id="scrape-text">Scrape Now</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full">
+
+    <!-- Notice / Alert Banner -->
+    <div id="notice-banner" class="hidden mb-6 p-4 rounded-xl border transition-all duration-300">
+      <div class="flex items-start justify-between">
+        <div class="flex items-start gap-3">
+          <span id="notice-icon" class="text-xl"></span>
+          <div>
+            <h3 id="notice-title" class="font-semibold text-sm"></h3>
+            <p id="notice-desc" class="text-xs mt-1 text-slate-600 leading-relaxed"></p>
+          </div>
+        </div>
+        <button id="notice-close" class="text-slate-400 hover:text-slate-600 text-lg leading-none">&times;</button>
+      </div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-bold">🏪</div>
+        <div>
+          <div class="text-xs text-slate-500 font-medium">Total Shops</div>
+          <div id="stat-total" class="text-2xl font-bold text-slate-900">0</div>
+        </div>
+      </div>
+      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl font-bold">🏷️</div>
+        <div>
+          <div class="text-xs text-slate-500 font-medium">Categories</div>
+          <div id="stat-categories" class="text-2xl font-bold text-slate-900">0</div>
+        </div>
+      </div>
+      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center text-xl font-bold">⏱️</div>
+        <div>
+          <div class="text-xs text-slate-500 font-medium">Last Scrape Status</div>
+          <div id="stat-last-time" class="text-sm font-semibold text-slate-700 truncate max-w-[200px]">Not scraped yet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-xs mb-6 flex flex-col md:flex-row gap-4 justify-between items-center">
+      <!-- Search Input -->
+      <div class="relative w-full md:w-96">
+        <input 
+          id="search-input" 
+          type="text" 
+          placeholder="Search by shop name, description, contact, or address..."
+          class="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+        />
+        <span class="absolute left-3 top-2.5 text-slate-400 text-sm">🔍</span>
+      </div>
+
+      <!-- Categories Pills -->
+      <div id="category-pills" class="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto pb-1 md:pb-0 scrollbar-none">
+        <button class="cat-pill active px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white transition-colors" data-category="">All</button>
+      </div>
+
+      <!-- Add Manual button -->
+      <button id="btn-add-shop" class="hidden md:flex px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors items-center gap-1">
+        <span>➕</span> Add Shop
+      </button>
+    </div>
+
+    <!-- Shop Cards Grid -->
+    <div id="shops-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- Loaded dynamically via JavaScript -->
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden text-center py-16 bg-white rounded-2xl border border-dashed border-slate-200">
+      <div class="text-5xl mb-3">📦</div>
+      <h3 class="text-base font-semibold text-slate-800">No Shop Records Found</h3>
+      <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">Click "Scrape Now" to fetch the latest stores from wzyp.cn, or click "Seed Demo Data" to explore the interface.</p>
+      <div class="mt-4 flex justify-center gap-3">
+        <button onclick="document.getElementById('btn-seed').click()" class="px-4 py-2 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors">
+          Seed Demo Data
+        </button>
+        <button onclick="document.getElementById('btn-scrape').click()" class="px-4 py-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">
+          Run Live Scraper
+        </button>
+      </div>
+    </div>
+
+    <!-- Pagination -->
+    <div id="pagination-bar" class="hidden mt-8 flex justify-center items-center gap-2">
+      <button id="btn-prev-page" class="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+      <span id="page-indicator" class="text-xs text-slate-600 px-2 font-medium">Page 1 / 1</span>
+      <button id="btn-next-page" class="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+    </div>
+
+  </main>
+
+  <!-- Scraper Config Modal -->
+  <div id="modal-config" class="hidden fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <h3 class="font-bold text-slate-900 flex items-center gap-2">
+          <span>⚙️</span> Scraper Settings & WAF Bypass
+        </h3>
+        <button onclick="closeModal('modal-config')" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+      </div>
+      <div class="space-y-4 py-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Target Scrape URL</label>
+          <input id="cfg-target-url" type="url" value="https://wzyp.cn" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <p class="text-[11px] text-slate-400 mt-1">Default is wzyp.cn, or enter any specific category or store listing page.</p>
+        </div>
+        <div>
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-semibold text-slate-700 mb-1">WAF / Session Cookie (Optional)</label>
+            <span class="text-[11px] text-indigo-600 cursor-pointer" onclick="toggleCookieHelp()">How to obtain Cookie?</span>
+          </div>
+          <textarea id="cfg-waf-cookie" rows="3" placeholder="acw_tc=...; PHPSESSID=..." class="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"></textarea>
+          <div id="cookie-help" class="hidden mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 leading-relaxed">
+            💡 <strong>Tip</strong>: wzyp.cn is protected by Alibaba Cloud ESA slide captcha. If blocked, open the target URL in your browser, complete the slide verification, press F12 -> Network tab -> copy the <code>Cookie</code> header value from any request, and paste it here.
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-3 border-t border-slate-100">
+        <button onclick="closeModal('modal-config')" class="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+        <button id="btn-save-config" class="px-4 py-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs">Save & Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual Add Modal -->
+  <div id="modal-add" class="hidden fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <h3 class="font-bold text-slate-900 flex items-center gap-2">
+          <span>➕</span> Add Shop Record
+        </h3>
+        <button onclick="closeModal('modal-add')" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+      </div>
+      <div class="space-y-3 py-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Shop Title *</label>
+          <input id="add-title" type="text" placeholder="e.g. Modern Artisan Specialty Store" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Category</label>
+            <input id="add-category" type="text" placeholder="e.g. Food & Dining" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Price / Starting At</label>
+            <input id="add-price" type="text" placeholder="e.g. From $19.99" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Contact Info</label>
+          <input id="add-contact" type="text" placeholder="e.g. Email / Phone / WeChat" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Address / Store URL</label>
+          <input id="add-address" type="text" placeholder="Physical address or website URL" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Description & Details</label>
+          <textarea id="add-desc" rows="3" placeholder="Describe the shop's offerings, specialties, and products..." class="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-3 border-t border-slate-100">
+        <button onclick="closeModal('modal-add')" class="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+        <button id="btn-submit-add" class="px-4 py-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs">Save Shop</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="hidden fixed bottom-6 right-6 z-50 px-4 py-3 bg-slate-900 text-white text-xs font-medium rounded-xl shadow-xl flex items-center space-x-2 transition-all">
+    <span id="toast-icon">ℹ️</span>
+    <span id="toast-msg">Notification message</span>
+  </div>
+
+  <!-- Footer -->
+  <footer class="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500 mt-auto">
+    <p>Shop Scraper & Showcase System &bull; Powered by Express + SQLite + Cheerio</p>
+  </footer>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
