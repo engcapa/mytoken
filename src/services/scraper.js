@@ -1,10 +1,29 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer-core';
+import fs from 'node:fs';
 import config from '../config/index.js';
 import { shopService, logService } from './db.js';
 
+function getBrowserPath() {
+  const candidates = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    process.env.CHROME_PATH,
+    process.env.BROWSER_PATH
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 /**
  * Scraper service for wzyp.cn and general shop websites
+ * Supports both fast HTTP mode and interactive browser verification mode
  */
 export class ScraperService {
   constructor(options = {}) {
@@ -34,7 +53,7 @@ export class ScraperService {
     const response = await axios.get(url, {
       headers,
       timeout: 15000,
-      validateStatus: () => true // Handle all status codes manually
+      validateStatus: () => true
     });
 
     return {
@@ -53,25 +72,36 @@ export class ScraperService {
       html.includes('AliyunCaptcha') ||
       html.includes('滑动验证页面') ||
       html.includes('CF_APP_WAF') ||
-      html.includes('阿里云ESA')
+      html.includes('阿里云ESA') ||
+      html.includes('aliyunCaptcha')
     );
   }
 
   /**
-   * Parse HTML content into structured shop records
+   * Parse HTML content into structured shop / goods records
    */
   parseShops(html, baseUrl) {
     const $ = cheerio.load(html);
     const shops = [];
 
-    // Try common shop item selectors
+    // Extract shop-level info if this is a single shop page like /shop/FT7
+    const shopHeaderTitle = $('.shop-name, .shop-title, h1, .header-title, .navbar-brand').first().text().trim();
+    const shopNotice = $('.notice, .announcement, .bulletin, .alert, .shop-desc').first().text().trim();
+    const shopContact = $('.contact, .qq, .wechat, .phone, .service-contact').first().text().trim();
+
+    // Check for goods items, table rows, cards
     const selectors = [
+      '.goods-item',
+      '.goods-card',
+      '.product-item',
+      '.van-card',
+      '.goods-box',
       '.shop-item',
       '.shop-card',
       '.store-item',
-      '.goods-item',
       '.item-card',
       '.list-item',
+      'table tbody tr',
       'article',
       '.card'
     ];
@@ -88,26 +118,31 @@ export class ScraperService {
     if (foundItems && foundItems.elements.length > 0) {
       foundItems.elements.each((index, el) => {
         const item = $(el);
-        const title = item.find('h1, h2, h3, h4, .title, .name, .shop-name').first().text().trim() ||
+        const title = item.find('h1, h2, h3, h4, .title, .name, .goods-name, .goods-title, td.name, td.title').first().text().trim() ||
                       item.find('a').first().text().trim();
-        if (!title) return;
+        if (!title || title.length < 2) return;
 
         const link = item.find('a').attr('href') || '';
         const fullUrl = link ? new URL(link, baseUrl).href : baseUrl;
         const img = item.find('img').first().attr('src') || '';
         const fullImg = img ? new URL(img, baseUrl).href : '';
 
-        const desc = item.find('.desc, .description, .intro, p').first().text().trim();
-        const price = item.find('.price, .cost, .tag-price').first().text().trim();
-        const category = item.find('.category, .tag, .badge').first().text().trim() || 'General';
-        const contact = item.find('.contact, .phone, .wechat, .author').first().text().trim();
-        const address = item.find('.address, .location').first().text().trim();
+        const desc = item.find('.desc, .description, .intro, .detail, p, td.desc').first().text().trim() || shopNotice;
+        const price = item.find('.price, .cost, .tag-price, .goods-price, td.price').first().text().trim();
+        const category = item.find('.category, .tag, .badge, .van-tag, td.category').first().text().trim() ||
+                         (shopHeaderTitle ? `${shopHeaderTitle}` : 'General');
+        const contact = item.find('.contact, .phone, .wechat, .author').first().text().trim() || shopContact;
+        const address = item.find('.address, .location').first().text().trim() || baseUrl;
+
+        // Stock status if available
+        const stock = item.find('.stock, .inventory, .badge-stock, td.stock').first().text().trim();
+        const displayDesc = stock ? `[Stock: ${stock}] ${desc}` : desc;
 
         shops.push({
-          externalId: fullUrl !== baseUrl ? fullUrl : `wzyp_${index}_${Date.now()}`,
+          externalId: fullUrl !== baseUrl ? `${fullUrl}_${index}` : `item_${index}_${encodeURIComponent(title.substring(0, 30))}`,
           title,
           category,
-          description: desc,
+          description: displayDesc,
           price,
           contact,
           address,
@@ -115,32 +150,33 @@ export class ScraperService {
           images: fullImg ? [fullImg] : [],
           rawData: {
             selectorUsed: foundItems.sel,
+            shopTitle: shopHeaderTitle,
             extractedAt: new Date().toISOString()
           }
         });
       });
     } else {
-      // Fallback: search for anchor tags that might represent shop or listing entries
+      // Fallback: search for anchor tags that might represent goods or shop links
       $('a').each((index, el) => {
         const a = $(el);
         const text = a.text().trim();
         const href = a.attr('href');
 
-        if (text && text.length > 3 && text.length < 50 && href && !href.startsWith('javascript:')) {
+        if (text && text.length > 3 && text.length < 80 && href && !href.startsWith('javascript:')) {
           try {
             const fullUrl = new URL(href, baseUrl).href;
             if (
               href.includes('shop') ||
-              href.includes('store') ||
               href.includes('item') ||
+              href.includes('goods') ||
               href.includes('detail') ||
-              href.includes('p/')
+              href.includes('product')
             ) {
               shops.push({
                 externalId: fullUrl,
                 title: text,
-                category: 'Featured',
-                description: a.attr('title') || '',
+                category: shopHeaderTitle || 'Featured Items',
+                description: a.attr('title') || shopNotice || '',
                 sourceUrl: fullUrl,
                 images: [],
                 rawData: {
@@ -160,7 +196,7 @@ export class ScraperService {
   }
 
   /**
-   * Run the scraping process
+   * Run standard HTTP scraping
    */
   async run({ url = this.targetUrl, cookie = this.cookie } = {}) {
     const target = url || this.targetUrl;
@@ -168,7 +204,7 @@ export class ScraperService {
       const response = await this.fetchHtml(target, cookie);
 
       if (this.isWafChallenge(response.data)) {
-        const errorMsg = 'Target site triggered Alibaba Cloud ESA slide captcha (WAF). Please complete the captcha in your browser and provide the session Cookie to continue.';
+        const errorMsg = 'Target site triggered Alibaba Cloud ESA slide captcha (WAF). Interactive browser verification is available.';
         logService.addLog({
           targetUrl: target,
           status: 'WAF_BLOCKED',
@@ -179,6 +215,7 @@ export class ScraperService {
         return {
           success: false,
           wafBlocked: true,
+          canInteractive: true,
           message: errorMsg,
           count: 0
         };
@@ -238,69 +275,169 @@ export class ScraperService {
   }
 
   /**
+   * Run interactive scraping with visible desktop browser (Chrome/Edge)
+   * The user can slide the captcha directly on their screen, and the scraper automatically captures cookies and products!
+   */
+  async runInteractive({ url = this.targetUrl } = {}) {
+    const target = url || this.targetUrl;
+    const browserPath = getBrowserPath();
+    if (!browserPath) {
+      return {
+        success: false,
+        message: 'No Chrome or Edge browser executable found on system.'
+      };
+    }
+
+    let browser = null;
+    try {
+      console.log(`[Interactive Scraper] Launching browser: ${browserPath}`);
+      browser = await puppeteer.launch({
+        executablePath: browserPath,
+        headless: false, // Visible window on user's desktop!
+        defaultViewport: null,
+        args: [
+          '--window-size=1200,800',
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled'
+        ]
+      });
+
+      const pages = await browser.pages();
+      const page = pages.length > 0 ? pages[0] : await browser.newPage();
+
+      await page.setUserAgent(this.userAgent);
+
+      console.log(`[Interactive Scraper] Navigating to: ${target}`);
+      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 35000 });
+
+      // Poll page for up to 90 seconds waiting for user to pass the captcha
+      const maxWaitMs = 90000;
+      const startTime = Date.now();
+      let solved = false;
+
+      while (Date.now() - startTime < maxWaitMs) {
+        const content = await page.content();
+        if (!this.isWafChallenge(content)) {
+          solved = true;
+          break;
+        }
+        await new Promise(r => setTimeout(r, 1200));
+      }
+
+      if (!solved) {
+        await browser.close();
+        return {
+          success: false,
+          wafBlocked: true,
+          message: 'Timeout waiting for manual verification slider to be completed.'
+        };
+      }
+
+      // Wait a moment for dynamic shop items to render
+      await new Promise(r => setTimeout(r, 2500));
+
+      // Extract fresh session cookies
+      const cookies = await page.cookies();
+      const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+      if (cookieHeader) {
+        this.cookie = cookieHeader;
+      }
+
+      // Extract fully rendered HTML
+      const renderedHtml = await page.content();
+      await browser.close();
+
+      const shops = this.parseShops(renderedHtml, target);
+      const savedCount = shopService.upsertBatch(shops);
+
+      const message = `Interactive scrape successful! Saved ${savedCount} records. Captured fresh session Cookie.`;
+      logService.addLog({
+        targetUrl: target,
+        status: 'SUCCESS',
+        itemsScraped: savedCount,
+        message
+      });
+
+      return {
+        success: true,
+        wafBlocked: false,
+        message,
+        count: savedCount,
+        cookie: cookieHeader,
+        items: shops
+      };
+    } catch (err) {
+      if (browser) {
+        try { await browser.close(); } catch {}
+      }
+      const message = `Interactive scrape error: ${err.message}`;
+      logService.addLog({
+        targetUrl: target,
+        status: 'FAILED',
+        itemsScraped: 0,
+        message
+      });
+      return {
+        success: false,
+        message,
+        count: 0
+      };
+    }
+  }
+
+  /**
    * Seed realistic sample shop data for demonstration
    */
   static seedSampleData() {
     const samples = [
       {
-        externalId: 'sample_wzyp_001',
-        title: 'Tech & Code Digital Store',
-        category: 'Digital Goods',
-        description: 'High-quality website templates, web scraping scripts, enterprise Node.js project boilerplates, and technical documentation.',
-        price: '$19.99 - $99.00',
-        contact: 'Email: support@techstore.io',
-        address: 'Instant Digital Delivery',
-        sourceUrl: 'https://wzyp.cn/shop/101',
+        externalId: 'sample_wzyp_FT7_001',
+        title: '【官方充值】Claude 3.5 Sonnet / Opus 独享会员号',
+        category: 'Claude专区',
+        description: '[Stock: In Stock] 独享原生IP注册账号，带原始邮箱，已升级Pro订阅，支持官方最新Claude 3.5 Sonnet模型。',
+        price: '¥ 145.00',
+        contact: '微信: ai_service_01',
+        address: 'wzyp.cn/shop/FT7 (链动小铺)',
+        sourceUrl: 'https://wzyp.cn/shop/FT7',
+        images: ['https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500&auto=format&fit=crop'],
+        rawData: { source: 'sample', shop: 'FT7', rating: 5.0, sales: 820 }
+      },
+      {
+        externalId: 'sample_wzyp_FT7_002',
+        title: '【自动发卡】ChatGPT Plus 官方代充 (支持续费)',
+        category: 'ChatGPT专区',
+        description: '[Stock: In Stock] 官方正规Stripe支付，提供订阅收据，杜绝黑卡封号，支持自备号升级或新号交付。',
+        price: '¥ 158.00',
+        contact: '微信: ai_service_01',
+        address: 'wzyp.cn/shop/FT7 (链动小铺)',
+        sourceUrl: 'https://wzyp.cn/shop/FT7',
+        images: ['https://images.unsplash.com/photo-1677442136019-21780efad99a?w=500&auto=format&fit=crop'],
+        rawData: { source: 'sample', shop: 'FT7', rating: 4.9, sales: 1290 }
+      },
+      {
+        externalId: 'sample_wzyp_FT7_003',
+        title: 'Cursor Pro 专业版 IDE 会员代充 (月付/年付)',
+        category: '开发者工具',
+        description: '[Stock: In Stock] 全球最受欢迎的 AI 代码编辑器会员，支持 GPT-4o 及 Claude 3.5 无限制高级代码补全。',
+        price: '¥ 140.00',
+        contact: 'QQ: 77777777',
+        address: 'wzyp.cn/shop/FT7 (链动小铺)',
+        sourceUrl: 'https://wzyp.cn/shop/FT7',
+        images: ['https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=500&auto=format&fit=crop'],
+        rawData: { source: 'sample', shop: 'FT7', rating: 5.0, sales: 640 }
+      },
+      {
+        externalId: 'sample_wzyp_FT7_004',
+        title: '【官方额度】OpenAI API 500$ 开发者独立中转 Key',
+        category: 'API额度专区',
+        description: '[Stock: In Stock] 高并发、国内直连极速响应，支持 gpt-4o、gpt-4-turbo 等全系模型，无封号风险。',
+        price: '¥ 88.00 起',
+        contact: 'TG: @wzyp_ft7_support',
+        address: 'wzyp.cn/shop/FT7 (链动小铺)',
+        sourceUrl: 'https://wzyp.cn/shop/FT7',
         images: ['https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=500&auto=format&fit=crop'],
-        rawData: { source: 'sample', rating: 4.9, sales: 520 }
-      },
-      {
-        externalId: 'sample_wzyp_002',
-        title: 'Artisan Gourmet & Local Specialities',
-        category: 'Food & Dining',
-        description: 'Authentic local delicacies, organic handcrafted snacks, specialty tea, and fresh farm products with express shipping.',
-        price: 'From $15.00',
-        contact: 'Phone: +86-138-0000-8888',
-        address: 'Wuma Commercial Street, Lucheng District, Wenzhou',
-        sourceUrl: 'https://wzyp.cn/shop/102',
-        images: ['https://images.unsplash.com/photo-1534452203293-494d7ddbf7e0?w=500&auto=format&fit=crop'],
-        rawData: { source: 'sample', rating: 4.8, sales: 1340 }
-      },
-      {
-        externalId: 'sample_wzyp_003',
-        title: 'Geek Hardware & Peripheral Studio',
-        category: 'Electronics',
-        description: 'Custom mechanical keyboard cases, open-source microcontrollers, dev kits, braided cables, and ergonomic accessories.',
-        price: '$12.00 - $189.00',
-        contact: 'Discord: @geek_studio',
-        address: 'Online & Electronic Marketplace Counter',
-        sourceUrl: 'https://wzyp.cn/shop/103',
-        images: ['https://images.unsplash.com/photo-1550009158-9ebf69173e03?w=500&auto=format&fit=crop'],
-        rawData: { source: 'sample', rating: 5.0, sales: 860 }
-      },
-      {
-        externalId: 'sample_wzyp_004',
-        title: 'Nordic Ceramic & Handmade Crafts',
-        category: 'Creative Arts',
-        description: 'Handmade ceramic mugs, minimalist home decor, original illustration prints, and leather-bound journals.',
-        price: 'From $25.00',
-        contact: 'Instagram: @nordic_craft_hub',
-        address: 'Innovation Park, University Town, Ouhai',
-        sourceUrl: 'https://wzyp.cn/shop/104',
-        images: ['https://images.unsplash.com/photo-1456086272160-b28b0645b729?w=500&auto=format&fit=crop'],
-        rawData: { source: 'sample', rating: 4.9, sales: 430 }
-      },
-      {
-        externalId: 'sample_wzyp_005',
-        title: 'Starry Bakery & Cold Brew Cafe',
-        category: 'Bakery & Cafe',
-        description: 'Artisanal cold brew coffees, French pastries, low-sugar sourdough bread, and seasonal dessert gift boxes.',
-        price: '$6.50 - $48.00',
-        contact: 'WhatsApp: +86-139-1111-2222',
-        address: 'No. 88 Xueyuan Middle Road',
-        sourceUrl: 'https://wzyp.cn/shop/105',
-        images: ['https://images.unsplash.com/photo-1509440159596-0249088772ff?w=500&auto=format&fit=crop'],
-        rawData: { source: 'sample', rating: 4.7, sales: 2190 }
+        rawData: { source: 'sample', shop: 'FT7', rating: 4.8, sales: 980 }
       }
     ];
 

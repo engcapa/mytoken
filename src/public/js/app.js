@@ -20,6 +20,9 @@ const categoryPills = document.getElementById('category-pills');
 const btnScrape = document.getElementById('btn-scrape');
 const scrapeIcon = document.getElementById('scrape-icon');
 const scrapeText = document.getElementById('scrape-text');
+const btnInteractive = document.getElementById('btn-interactive');
+const interactiveIcon = document.getElementById('interactive-icon');
+const interactiveText = document.getElementById('interactive-text');
 const btnSeed = document.getElementById('btn-seed');
 const btnConfig = document.getElementById('btn-config');
 const btnAddShop = document.getElementById('btn-add-shop');
@@ -64,8 +67,11 @@ function bindEvents() {
     }
   });
 
-  // Scrape action
-  btnScrape.addEventListener('click', handleScrape);
+  // Scrape actions
+  btnScrape.addEventListener('click', () => handleScrape({ interactive: false }));
+  if (btnInteractive) {
+    btnInteractive.addEventListener('click', () => handleScrape({ interactive: true }));
+  }
 
   // Seed sample action
   btnSeed.addEventListener('click', handleSeed);
@@ -269,30 +275,46 @@ function renderShops(shops) {
 }
 
 // Scrape Handler
-async function handleScrape() {
+async function handleScrape({ interactive = false } = {}) {
   if (state.isScraping) return;
 
   state.isScraping = true;
-  btnScrape.disabled = true;
-  btnScrape.classList.add('opacity-75', 'cursor-not-allowed');
-  scrapeIcon.textContent = '⏳';
-  scrapeText.textContent = 'Scraping...';
+  
+  if (interactive) {
+    if (btnInteractive) {
+      btnInteractive.disabled = true;
+      btnInteractive.classList.add('opacity-75', 'cursor-not-allowed');
+      interactiveIcon.textContent = '⏳';
+      interactiveText.textContent = 'Browser Open...';
+    }
+    showToast('🌐 Desktop browser opened! Please complete the slide verification in the pop-up window.');
+  } else {
+    btnScrape.disabled = true;
+    btnScrape.classList.add('opacity-75', 'cursor-not-allowed');
+    scrapeIcon.textContent = '⏳';
+    scrapeText.textContent = 'Scraping...';
+    showToast('🚀 Initiating scraping job...');
+  }
 
   const targetUrl = document.getElementById('cfg-target-url')?.value.trim() || 'https://wzyp.cn';
   const cookie = document.getElementById('cfg-waf-cookie')?.value.trim() || '';
 
   try {
-    showToast('🚀 Initiating scraping job...');
     const res = await fetch('/api/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: targetUrl, cookie })
+      body: JSON.stringify({ url: targetUrl, cookie, interactive })
     });
 
     const result = await res.json();
 
     if (result.success) {
-      showToast(`✅ Scrape succeeded! Saved ${result.count} shops.`);
+      showToast(`✅ Scrape succeeded! Saved ${result.count} items.`);
+      if (result.cookie) {
+        const cookieInput = document.getElementById('cfg-waf-cookie');
+        if (cookieInput) cookieInput.value = result.cookie;
+        localStorage.setItem('scraper_waf_cookie', result.cookie);
+      }
       loadStats();
       loadCategories();
       loadShops();
@@ -301,12 +323,16 @@ async function handleScrape() {
       showNotice(
         'warning',
         '⚠️ Target site triggered Alibaba Cloud ESA WAF Challenge',
-        `The target site (wzyp.cn) is protected by a bot mitigation firewall. Unauthenticated requests are redirected to a slide captcha challenge.<br>
-        <strong>How to bypass:</strong><br>
-        1. Open <a href="${targetUrl}" target="_blank" class="text-indigo-600 underline font-semibold">${targetUrl}</a> in your browser and pass the captcha.<br>
-        2. Press F12 -> Network tab -> copy the <code>Cookie</code> request header from any request.<br>
-        3. Click <strong>"⚙️ Settings"</strong> above, paste the Cookie, and click "Scrape Now" again.<br>
-        <em>Tip: You can also click "📦 Seed Demo Data" to explore the interface right away!</em>`
+        `The target site is protected by anti-bot verification. You can resolve this interactively without leaving the app:<br>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <button onclick="handleInteractiveScrape()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
+            <span>👁️</span> Launch Interactive Verification Browser
+          </button>
+          <a href="${targetUrl}" target="_blank" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium transition-colors">
+            Open in External Browser
+          </a>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2">Clicking "Launch Interactive Verification Browser" will pop up Chrome/Edge on your screen. Simply slide the puzzle, and the system will automatically grab the products and save your session!</p>`
       );
     } else {
       showNotice('danger', '❌ Scrape Job Failed', result.message || 'Unknown error');
@@ -318,10 +344,21 @@ async function handleScrape() {
     btnScrape.disabled = false;
     btnScrape.classList.remove('opacity-75', 'cursor-not-allowed');
     scrapeIcon.textContent = '🚀';
-    scrapeText.textContent = 'Scrape Now';
+    scrapeText.textContent = 'Fast Scrape';
+
+    if (btnInteractive) {
+      btnInteractive.disabled = false;
+      btnInteractive.classList.remove('opacity-75', 'cursor-not-allowed');
+      interactiveIcon.textContent = '👁️';
+      interactiveText.textContent = 'Interactive Scrape';
+    }
     loadStats();
   }
 }
+
+window.handleInteractiveScrape = function() {
+  handleScrape({ interactive: true });
+};
 
 // Seed Sample Data
 async function handleSeed() {

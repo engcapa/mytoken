@@ -97,11 +97,16 @@ router.get('/logs', (req, res) => {
   }
 });
 
-// POST /api/scrape - trigger scraper
+// POST /api/scrape - trigger scraper (supports fast HTTP or interactive browser mode)
 router.post('/scrape', async (req, res) => {
   try {
-    const { url, cookie } = req.body;
-    const result = await scraperService.run({ url, cookie });
+    const { url, cookie, interactive = false } = req.body;
+    let result;
+    if (interactive) {
+      result = await scraperService.runInteractive({ url });
+    } else {
+      result = await scraperService.run({ url, cookie });
+    }
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

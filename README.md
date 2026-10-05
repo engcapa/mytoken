@@ -78,25 +78,31 @@ Open your browser and navigate to: **http://localhost:3000**
 
 ### 4. Run Scraper via Command Line
 
-To execute a scraping task directly in your terminal:
-
 ```bash
+# Standard fast scraping
 npm run scrape
+
+# Interactive desktop browser mode (pops up window to solve captcha)
+npm run scrape:interactive
 ```
 
 ---
 
-## 🛡️ Target Site Anti-Scraping (WAF) Notice
+## 🛡️ Target Site Anti-Scraping (WAF) & Interactive Bypass
 
 The target domain `https://wzyp.cn` is protected by **Alibaba Cloud ESA Web Application Firewall (WAF)** with slide captcha verification. Unauthenticated automated requests will receive a captcha challenge page.
 
-### How to Bypass:
-1. Open `https://wzyp.cn` in your browser and complete the slide verification.
+### 🌟 Solution 1: Interactive Browser Mode (Recommended)
+- **Web UI**: Click the **"👁️ Interactive Scrape"** button in the dashboard (or click "Launch Interactive Verification Browser" on the warning banner). A desktop Chrome/Edge window will pop up automatically. Simply drag the slider captcha; the app will immediately extract the products, save your session cookies, and update the dashboard!
+- **Terminal CLI**: Run `npm run scrape:interactive` to launch the interactive browser session.
+
+### 🔧 Solution 2: Manual Cookie Injection
+1. Open `https://wzyp.cn/shop/FT7` in your browser and complete the slide verification.
 2. Press `F12` to open Developer Tools, go to the **Network** tab, refresh the page, and select any request.
 3. Copy the value of the `Cookie` request header.
-4. Provide the Cookie:
-   - **Method A**: Click **"⚙️ Settings"** in the web dashboard, paste your Cookie, and save.
-   - **Method B**: Set `WAF_COOKIE="your_cookie_here"` in your `.env` file.
+4. Click **"⚙️ Settings"** in the web dashboard, paste your Cookie, and save.
+
+*Tip: You can click the **"📦 Seed Demo Data"** button on the web interface to preview sample stores immediately.*
 
 *Tip: You can click the **"📦 Seed Demo Data"** button on the web interface to preview sample stores immediately.*
 
