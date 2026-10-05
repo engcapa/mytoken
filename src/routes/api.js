@@ -275,6 +275,56 @@ router.get('/ip-monitor', (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+// GET /api/system/antiban - get current anti-ban & proxy settings
+router.get('/system/antiban', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      antiBanEnabled: config.antiBan.enabled,
+      minDelayMs: config.antiBan.minDelayMs,
+      maxDelayMs: config.antiBan.maxDelayMs,
+      shopDelayMs: config.antiBan.shopDelayMs,
+      autoProxyFallback: config.antiBan.autoProxyFallback,
+      simulateHumanBehavior: config.antiBan.simulateHumanBehavior,
+      globalProxyEnabled: config.proxy.enabled,
+      proxyUrl: config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy || ''
+    }
+  });
+});
+
+// POST /api/system/antiban - update anti-ban & proxy settings at runtime
+router.post('/system/antiban', (req, res) => {
+  try {
+    const { antiBanEnabled, minDelayMs, maxDelayMs, shopDelayMs, autoProxyFallback, simulateHumanBehavior, globalProxyEnabled, proxyUrl } = req.body || {};
+    if (antiBanEnabled !== undefined) config.antiBan.enabled = Boolean(antiBanEnabled);
+    if (minDelayMs !== undefined) config.antiBan.minDelayMs = parseInt(minDelayMs, 10);
+    if (maxDelayMs !== undefined) config.antiBan.maxDelayMs = parseInt(maxDelayMs, 10);
+    if (shopDelayMs !== undefined) config.antiBan.shopDelayMs = parseInt(shopDelayMs, 10);
+    if (autoProxyFallback !== undefined) config.antiBan.autoProxyFallback = Boolean(autoProxyFallback);
+    if (simulateHumanBehavior !== undefined) config.antiBan.simulateHumanBehavior = Boolean(simulateHumanBehavior);
+    if (globalProxyEnabled !== undefined) config.proxy.enabled = Boolean(globalProxyEnabled);
+    if (proxyUrl !== undefined) {
+      config.proxy.httpsProxy = proxyUrl;
+      config.proxy.httpProxy = proxyUrl;
+      config.proxy.allProxy = proxyUrl;
+    }
+    res.json({
+      success: true,
+      message: '防封与拟人化策略设置已实时生效！',
+      data: {
+        antiBanEnabled: config.antiBan.enabled,
+        minDelayMs: config.antiBan.minDelayMs,
+        maxDelayMs: config.antiBan.maxDelayMs,
+        shopDelayMs: config.antiBan.shopDelayMs,
+        autoProxyFallback: config.antiBan.autoProxyFallback,
+        simulateHumanBehavior: config.antiBan.simulateHumanBehavior,
+        globalProxyEnabled: config.proxy.enabled,
+        proxyUrl: config.proxy.httpsProxy || config.proxy.httpProxy || ''
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 export default router;

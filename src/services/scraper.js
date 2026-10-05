@@ -111,6 +111,119 @@ export function parseStockStatus(text = '', raw = '') {
   return { inStock: 1, stockText: '有货' };
 }
 
+const MODERN_FINGERPRINTS = [
+  {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    secChUa: '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+    platform: '"Windows"'
+  },
+  {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0',
+    secChUa: '"Microsoft Edge";v="129", "Chromium";v="129", "Not=A?Brand";v="24"',
+    platform: '"Windows"'
+  },
+  {
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    secChUa: '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+    platform: '"macOS"'
+  }
+];
+
+export function getRandomFingerprint() {
+  return MODERN_FINGERPRINTS[Math.floor(Math.random() * MODERN_FINGERPRINTS.length)];
+}
+
+export function humanDelay(minMs = 1200, maxMs = 2800, action = '') {
+  if (!config.antiBan.enabled) return Promise.resolve();
+  const duration = Math.floor(minMs + Math.random() * (maxMs - minMs));
+  if (action) {
+    console.log(`[拟人化防封] ${action}，模拟人类阅读与操作停顿 ${(duration / 1000).toFixed(2)} 秒...`);
+  }
+  return new Promise(r => setTimeout(r, duration));
+}
+
+export function buildBrowserHeaders(shopCode = '', customCookie = '', isHtml = false) {
+  const fp = getRandomFingerprint();
+  const headers = {
+    'User-Agent': fp.userAgent,
+    'Accept': isHtml
+      ? 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+      : 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'sec-ch-ua': fp.secChUa,
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': fp.platform,
+    'sec-fetch-dest': isHtml ? 'document' : 'empty',
+    'sec-fetch-mode': isHtml ? 'navigate' : 'cors',
+    'sec-fetch-site': 'same-origin'
+  };
+
+  if (isHtml) {
+    headers['Upgrade-Insecure-Requests'] = '1';
+  } else {
+    headers['Origin'] = 'https://wzyp.cn';
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (shopCode) {
+    headers['Referer'] = `https://wzyp.cn/shop/${shopCode}`;
+  }
+  if (customCookie) {
+    headers['Cookie'] = customCookie;
+  }
+  return headers;
+}
+
+/**
+ * Robust HTTP request executor with automatic proxy fallback & backoff retries
+ */
+export async function executeWithAntiBan(requestFn, { shopCode = '', label = '' } = {}) {
+  let attempt = 0;
+  const maxAttempts = 3;
+  let useProxy = config.proxy.enabled;
+
+  while (attempt < maxAttempts) {
+    attempt++;
+    const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
+    const activeProxy = (useProxy && proxyUrl) ? parseProxy(proxyUrl) : false;
+
+    try {
+      const res = await requestFn(activeProxy);
+      const isBlocked = res?.status === 520 || res?.status === 502 || res?.status === 429;
+      if (isBlocked) {
+        console.warn(`[拟人化防封] 收到阻断响应 HTTP ${res.status} (${label})。`);
+        if (!useProxy && proxyUrl && config.antiBan.autoProxyFallback) {
+          console.log(`[拟人化防封] 自动开启代理通道 (${proxyUrl}) 并重试...`);
+          useProxy = true;
+          await humanDelay(1500, 3000, '切换代理通道');
+          continue;
+        }
+        if (attempt < maxAttempts) {
+          await humanDelay(2000 * attempt, 3500 * attempt, '风控冷却退避');
+          continue;
+        }
+      }
+      return res;
+    } catch (err) {
+      console.warn(`[拟人化防封] 请求网络异常 (${label}): ${err.message}`);
+      const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
+      if (!useProxy && proxyUrl && config.antiBan.autoProxyFallback) {
+        console.log(`[拟人化防封] 遇到网络异常，自动启用代理通道 (${proxyUrl}) 重试...`);
+        useProxy = true;
+        await humanDelay(1500, 2500, '切换代理通道');
+        continue;
+      }
+      if (attempt < maxAttempts) {
+        await humanDelay(2000, 3500, '重试前等待');
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 /**
  * Scraper service for multi-shop wzyp.cn product extraction
  */
@@ -123,38 +236,36 @@ export class ScraperService {
 
   /**
    * Directly fetch shop data from wzyp.cn internal JSON APIs
-   * Bypasses client-side rendering differences across varying shop themes
+   * Emulates realistic human browsing pauses and sequential category traversal
    */
   async fetchShopViaApi(shopCode, customCookie = '') {
     if (!shopCode) return { success: false, items: [], message: 'No shop code' };
 
     const cookie = customCookie || this.cookie;
-    const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
-    const proxyConfig = config.proxy.enabled && proxyUrl ? parseProxy(proxyUrl) : false;
 
-    const headers = {
-      'User-Agent': this.userAgent,
-      'Content-Type': 'application/json',
-      'Referer': `https://wzyp.cn/shop/${shopCode}`,
-      'Accept': 'application/json, text/plain, */*'
-    };
-    if (cookie) headers['Cookie'] = cookie;
-
-    // 1. Fetch category list
+    // 1. Fetch category list with anti-ban wrapper
     let catData;
     try {
-      const catRes = await axios.post(
-        'https://wzyp.cn/shopApi/Shop/categoryList',
-        { token: shopCode, goods_type: 'card', category_key: '' },
-        { headers, proxy: proxyConfig, timeout: 15000, validateStatus: () => true }
+      const catRes = await executeWithAntiBan(
+        (proxyConfig) => axios.post(
+          'https://wzyp.cn/shopApi/Shop/categoryList',
+          { token: shopCode, goods_type: 'card', category_key: '' },
+          {
+            headers: buildBrowserHeaders(shopCode, cookie),
+            proxy: proxyConfig,
+            timeout: 15000,
+            validateStatus: () => true
+          }
+        ),
+        { shopCode, label: `小铺 [${shopCode}] 分类列表` }
       );
 
-      if (catRes.status >= 400 || !catRes.data || catRes.data.code !== 1) {
+      if (!catRes || catRes.status >= 400 || !catRes.data || catRes.data.code !== 1) {
         return {
           success: false,
-          wafBlocked: catRes.status === 403 || this.isWafChallenge(typeof catRes.data === 'string' ? catRes.data : ''),
+          wafBlocked: catRes?.status === 403 || this.isWafChallenge(typeof catRes?.data === 'string' ? catRes.data : ''),
           items: [],
-          message: `Category API response failed with code: ${catRes.data?.code || catRes.status}`
+          message: `Category API response failed with code: ${catRes?.data?.code || catRes?.status}`
         };
       }
       catData = catRes.data.data || [];
@@ -166,19 +277,21 @@ export class ScraperService {
       return { success: false, items: [], message: 'No categories returned by shopApi' };
     }
 
-    // 2. Fetch products for each category in controlled concurrent batches
+    // 2. Fetch products for each category SEQUENTIALLY to emulate human browsing
     const allItems = [];
-    const concurrency = 4;
+    console.log(`[拟人化防封] 小铺 [${shopCode}] 共有 ${catData.length} 个分类，按人类阅读节奏逐个采集...`);
 
-    for (let i = 0; i < catData.length; i += concurrency) {
-      const chunk = catData.slice(i, i + concurrency);
-      const chunkPromises = chunk.map(async (cat) => {
-        try {
-          let currentPage = 1;
-          let hasMore = true;
+    for (let cIdx = 0; cIdx < catData.length; cIdx++) {
+      const cat = catData[cIdx];
+      console.log(`[小铺 ${shopCode}] [${cIdx + 1}/${catData.length}] 正在采集分类: 【${cat.name}】...`);
 
-          while (hasMore) {
-            const goodsRes = await axios.post(
+      try {
+        let currentPage = 1;
+        let hasMore = true;
+
+        while (hasMore) {
+          const goodsRes = await executeWithAntiBan(
+            (proxyConfig) => axios.post(
               'https://wzyp.cn/shopApi/Shop/goodsList',
               {
                 token: shopCode,
@@ -188,64 +301,75 @@ export class ScraperService {
                 current: currentPage,
                 pageSize: 100
               },
-              { headers, proxy: proxyConfig, timeout: 15000, validateStatus: () => true }
-            );
+              {
+                headers: buildBrowserHeaders(shopCode, cookie),
+                proxy: proxyConfig,
+                timeout: 15000,
+                validateStatus: () => true
+              }
+            ),
+            { shopCode, label: `分类【${cat.name}】第 ${currentPage} 页` }
+          );
 
-            if (goodsRes.status !== 200 || !goodsRes.data?.data?.list) {
-              break;
-            }
-
-            const list = goodsRes.data.data.list || [];
-            const total = goodsRes.data.data.total || list.length;
-
-            for (const g of list) {
-              const goodsKey = g.goods_key || '';
-              const directLink = g.link || (goodsKey ? `https://wzyp.cn/item/${goodsKey}` : `https://wzyp.cn/shop/${shopCode}`);
-              const stockCount = g.extend?.stock_count;
-              const inStock = stockCount !== undefined ? (stockCount > 0 ? 1 : 0) : 1;
-              const stockText = stockCount !== undefined ? (stockCount > 0 ? `剩余${stockCount}件` : '缺货') : '有货';
-              const priceNum = typeof g.price === 'number' ? g.price : parseNumericPrice(g.price);
-              const cleanDesc = stripHtml(g.description || '');
-
-              allItems.push({
-                externalId: goodsKey ? `wzyp_${goodsKey}` : `wzyp_${shopCode}_${cat.id}_${encodeURIComponent(g.name || '')}`,
-                title: g.name || '未命名商品',
-                category: cat.name || g.category?.name || '综合专区',
-                description: cleanDesc,
-                price: g.price !== undefined ? `¥ ${g.price}` : '',
-                priceNum,
-                inStock,
-                stockText,
-                shopCode,
-                contact: g.user?.nickname || `小铺 ${shopCode}`,
-                address: `https://wzyp.cn/shop/${shopCode}`,
-                sourceUrl: directLink, // Specific product detail link (https://wzyp.cn/item/{goods_key})
-                images: g.image ? [g.image] : [],
-                rawData: {
-                  goods_key: goodsKey,
-                  market_price: g.market_price,
-                  stock_count: stockCount,
-                  category_id: cat.id,
-                  extractedAt: new Date().toISOString()
-                }
-              });
-            }
-
-            if (currentPage * 100 >= total || list.length === 0) {
-              hasMore = false;
-            } else {
-              currentPage++;
-            }
+          if (!goodsRes || goodsRes.status !== 200 || !goodsRes.data?.data?.list) {
+            break;
           }
-        } catch (catErr) {
-          console.warn(`[Scraper] Failed to fetch goods for category [${cat.name}] in shop [${shopCode}]:`, catErr.message);
-        }
-      });
 
-      await Promise.all(chunkPromises);
-      // Brief pause between chunks to be respectful to server
-      if (i + concurrency < catData.length) {
-        await new Promise(r => setTimeout(r, 120));
+          const list = goodsRes.data.data.list || [];
+          const total = goodsRes.data.data.total || list.length;
+
+          for (const g of list) {
+            const goodsKey = g.goods_key || '';
+            const directLink = g.link || (goodsKey ? `https://wzyp.cn/item/${goodsKey}` : `https://wzyp.cn/shop/${shopCode}`);
+            const stockCount = g.extend?.stock_count;
+            const inStock = stockCount !== undefined ? (stockCount > 0 ? 1 : 0) : 1;
+            const stockText = stockCount !== undefined ? (stockCount > 0 ? `剩余${stockCount}件` : '缺货') : '有货';
+            const priceNum = typeof g.price === 'number' ? g.price : parseNumericPrice(g.price);
+            const cleanDesc = stripHtml(g.description || '');
+
+            allItems.push({
+              externalId: goodsKey ? `wzyp_${goodsKey}` : `wzyp_${shopCode}_${cat.id}_${encodeURIComponent(g.name || '')}`,
+              title: g.name || '未命名商品',
+              category: cat.name || g.category?.name || '综合专区',
+              description: cleanDesc,
+              price: g.price !== undefined ? `¥ ${g.price}` : '',
+              priceNum,
+              inStock,
+              stockText,
+              shopCode,
+              contact: g.user?.nickname || `小铺 ${shopCode}`,
+              address: `https://wzyp.cn/shop/${shopCode}`,
+              sourceUrl: directLink,
+              images: g.image ? [g.image] : [],
+              rawData: {
+                goods_key: goodsKey,
+                market_price: g.market_price,
+                stock_count: stockCount,
+                category_id: cat.id,
+                extractedAt: new Date().toISOString()
+              }
+            });
+          }
+
+          if (currentPage * 100 >= total || list.length === 0) {
+            hasMore = false;
+          } else {
+            currentPage++;
+            // Human reading pause between pages
+            await humanDelay(800, 1600, `分类【${cat.name}】翻页`);
+          }
+        }
+      } catch (catErr) {
+        console.warn(`[Scraper] Failed to fetch goods for category [${cat.name}] in shop [${shopCode}]:`, catErr.message);
+      }
+
+      // Human browsing delay between categories
+      if (cIdx < catData.length - 1) {
+        await humanDelay(
+          config.antiBan.minDelayMs,
+          config.antiBan.maxDelayMs,
+          `小铺 [${shopCode}] 切换至下一分类`
+        );
       }
     }
 
@@ -257,37 +381,26 @@ export class ScraperService {
   }
 
   /**
-   * Perform HTTP fetch with browser-like headers
+   * Perform HTTP fetch with browser-like headers and anti-ban retry
    */
   async fetchHtml(url, customCookie = '') {
     const cookie = customCookie || this.cookie;
-    const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
-    const proxyConfig = config.proxy.enabled && proxyUrl ? parseProxy(proxyUrl) : false;
+    const shopCode = extractShopCode(url);
 
-    const headers = {
-      'User-Agent': this.userAgent,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      'Upgrade-Insecure-Requests': '1'
-    };
-
-    if (cookie) {
-      headers['Cookie'] = cookie;
-    }
-
-    const response = await axios.get(url, {
-      headers,
-      proxy: proxyConfig,
-      timeout: 15000,
-      validateStatus: () => true
-    });
+    const response = await executeWithAntiBan(
+      (proxyConfig) => axios.get(url, {
+        headers: buildBrowserHeaders(shopCode, cookie, true),
+        proxy: proxyConfig,
+        timeout: 15000,
+        validateStatus: () => true
+      }),
+      { shopCode, label: `HTML页面 [${url}]` }
+    );
 
     return {
-      status: response.status,
-      headers: response.headers,
-      data: response.data
+      status: response?.status || 0,
+      headers: response?.headers || {},
+      data: response?.data || ''
     };
   }
 
@@ -458,11 +571,13 @@ export class ScraperService {
 
     try {
       console.log(`[Browser Scraper] Launching ${interactive ? 'interactive' : 'headless'} browser for: ${targetUrl}`);
+      const fp = getRandomFingerprint();
       const browserArgs = [
-        '--window-size=1200,800',
+        '--window-size=1280,850',
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled'
+        '--disable-blink-features=AutomationControlled',
+        '--disable-infobars'
       ];
       const proxyUrl = config.proxy.httpsProxy || config.proxy.httpProxy || config.proxy.allProxy;
       if (config.proxy.enabled && proxyUrl) {
@@ -478,9 +593,36 @@ export class ScraperService {
 
       const pages = await browser.pages();
       const page = pages.length > 0 ? pages[0] : await browser.newPage();
-      await page.setUserAgent(this.userAgent);
+      await page.setUserAgent(fp.userAgent);
+
+      // Stealth evasion to bypass bot detection
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en-US', 'en'] });
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => [
+            { name: 'PDF Viewer', filename: 'internal-pdf-viewer' },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' }
+          ]
+        });
+      });
 
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+
+      // Simulate human-like mouse movement and gentle scrolling
+      if (config.antiBan.simulateHumanBehavior) {
+        try {
+          console.log(`[拟人化防封] 浏览器模拟人类轻微视口滚动与鼠标轨迹...`);
+          await page.mouse.move(150 + Math.random() * 200, 150 + Math.random() * 100);
+          await page.mouse.move(450 + Math.random() * 200, 320 + Math.random() * 150, { steps: 20 });
+          await page.evaluate(() => window.scrollBy({ top: 320, behavior: 'smooth' }));
+          await new Promise(r => setTimeout(r, 600 + Math.random() * 400));
+          await page.evaluate(() => window.scrollBy({ top: -80, behavior: 'smooth' }));
+        } catch {
+          // Non-critical
+        }
+      }
 
       // Handle WAF challenge
       const maxWaitMs = interactive ? 60000 : 5000;
@@ -800,7 +942,8 @@ export class ScraperService {
     let anyWaf = false;
     const results = [];
 
-    for (const target of targetList) {
+    for (let i = 0; i < targetList.length; i++) {
+      const target = targetList[i];
       const res = await this.runSingle({ url: target, cookie });
       results.push({ url: target, ...res });
       if (res.success) {
@@ -808,6 +951,15 @@ export class ScraperService {
       }
       if (res.wafBlocked) {
         anyWaf = true;
+      }
+
+      // Human-like pause between multiple shops
+      if (i < targetList.length - 1) {
+        await humanDelay(
+          config.antiBan.shopDelayMs,
+          config.antiBan.shopDelayMs + 2000,
+          `小铺 [${extractShopCode(target)}] 采集完成，准备进入下一小铺`
+        );
       }
     }
 
@@ -865,6 +1017,15 @@ export class ScraperService {
           itemsScraped: 0,
           message: `[${shopCode}] 交互抓取未能提取到商品: ${browserRes.message || '未知原因'}`
         });
+      }
+
+      // Human-like pause between multiple shops
+      if (i < targetList.length - 1) {
+        await humanDelay(
+          config.antiBan.shopDelayMs,
+          config.antiBan.shopDelayMs + 2000,
+          `小铺 [${shopCode}] 交互抓取完成，准备切换至下一小铺`
+        );
       }
     }
 

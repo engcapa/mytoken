@@ -38,9 +38,11 @@ const noticeClose = document.getElementById('notice-close');
 
 // Jev & Proxy DOM Elements
 const tabBtnShops = document.getElementById('tab-btn-shops');
+const tabBtnAntiban = document.getElementById('tab-btn-antiban');
 const tabBtnJev = document.getElementById('tab-btn-jev');
 const tabBtnMappings = document.getElementById('tab-btn-mappings');
 const tabContentShops = document.getElementById('tab-content-shops');
+const tabContentAntiban = document.getElementById('tab-content-antiban');
 const tabContentJev = document.getElementById('tab-content-jev');
 const tabContentMappings = document.getElementById('tab-content-mappings');
 const btnHarmonize = document.getElementById('btn-harmonize');
@@ -55,6 +57,16 @@ const btnToggleKeyVis = document.getElementById('btn-toggle-key-vis');
 const btnTestJev = document.getElementById('btn-test-jev');
 const testJevText = document.getElementById('test-jev-text');
 const testJevResult = document.getElementById('test-jev-result');
+
+// Anti-Ban & Human Simulation DOM Elements
+const cfgAntibanEnabled = document.getElementById('cfg-antiban-enabled');
+const cfgHumanBehavior = document.getElementById('cfg-human-behavior');
+const cfgAutoFallback = document.getElementById('cfg-auto-fallback');
+const cfgGlobalProxy = document.getElementById('cfg-global-proxy');
+const cfgAntibanProxyUrl = document.getElementById('cfg-antiban-proxy-url');
+const cfgMinDelay = document.getElementById('cfg-min-delay');
+const cfgMaxDelay = document.getElementById('cfg-max-delay');
+const cfgShopDelay = document.getElementById('cfg-shop-delay');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -135,6 +147,7 @@ function bindEvents() {
 
   // Settings Tabs
   if (tabBtnShops) tabBtnShops.addEventListener('click', () => switchSettingsTab('shops'));
+  if (tabBtnAntiban) tabBtnAntiban.addEventListener('click', () => switchSettingsTab('antiban'));
   if (tabBtnJev) tabBtnJev.addEventListener('click', () => switchSettingsTab('jev'));
   if (tabBtnMappings) tabBtnMappings.addEventListener('click', () => switchSettingsTab('mappings'));
 
@@ -161,6 +174,7 @@ function bindEvents() {
 function switchSettingsTab(tabName) {
   const tabs = [
     { name: 'shops', btn: tabBtnShops, content: tabContentShops },
+    { name: 'antiban', btn: tabBtnAntiban, content: tabContentAntiban },
     { name: 'jev', btn: tabBtnJev, content: tabContentJev },
     { name: 'mappings', btn: tabBtnMappings, content: tabContentMappings }
   ];
@@ -168,10 +182,10 @@ function switchSettingsTab(tabName) {
   tabs.forEach(t => {
     if (!t.btn || !t.content) return;
     if (t.name === tabName) {
-      t.btn.className = 'tab-btn active px-4 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors';
+      t.btn.className = 'tab-btn active px-3 py-2 border-b-2 border-indigo-600 text-indigo-600 transition-colors';
       t.content.classList.remove('hidden');
     } else {
-      t.btn.className = 'tab-btn px-4 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors';
+      t.btn.className = 'tab-btn px-3 py-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors';
       t.content.classList.add('hidden');
     }
   });
@@ -188,6 +202,24 @@ async function restoreConfig() {
   const savedCookie = localStorage.getItem('scraper_waf_cookie') || '';
   if (cfgTargetShops) cfgTargetShops.value = savedShops;
   if (cfgWafCookie) cfgWafCookie.value = savedCookie;
+
+  // Restore Anti-Ban and Proxy configurations from server
+  try {
+    const res = await fetch('/api/system/antiban');
+    const json = await res.json();
+    if (json.success && json.data) {
+      if (cfgAntibanEnabled) cfgAntibanEnabled.checked = json.data.antiBanEnabled;
+      if (cfgHumanBehavior) cfgHumanBehavior.checked = json.data.simulateHumanBehavior;
+      if (cfgAutoFallback) cfgAutoFallback.checked = json.data.autoProxyFallback;
+      if (cfgGlobalProxy) cfgGlobalProxy.checked = json.data.globalProxyEnabled;
+      if (cfgAntibanProxyUrl) cfgAntibanProxyUrl.value = json.data.proxyUrl || '';
+      if (cfgMinDelay) cfgMinDelay.value = json.data.minDelayMs || 1200;
+      if (cfgMaxDelay) cfgMaxDelay.value = json.data.maxDelayMs || 2800;
+      if (cfgShopDelay) cfgShopDelay.value = json.data.shopDelayMs || 3000;
+    }
+  } catch (err) {
+    console.warn('Failed to load Anti-Ban config from server:', err);
+  }
 
   // Restore Jev and Proxy configurations from server
   try {
@@ -215,6 +247,28 @@ async function saveConfig() {
   localStorage.setItem('scraper_target_shops', shops);
   localStorage.setItem('scraper_waf_cookie', cookie);
 
+  // Save Anti-Ban and Proxy settings to server
+  const antibanPayload = {
+    antiBanEnabled: cfgAntibanEnabled ? cfgAntibanEnabled.checked : true,
+    simulateHumanBehavior: cfgHumanBehavior ? cfgHumanBehavior.checked : true,
+    autoProxyFallback: cfgAutoFallback ? cfgAutoFallback.checked : true,
+    globalProxyEnabled: cfgGlobalProxy ? cfgGlobalProxy.checked : true,
+    proxyUrl: cfgAntibanProxyUrl ? cfgAntibanProxyUrl.value.trim() : '',
+    minDelayMs: cfgMinDelay ? parseInt(cfgMinDelay.value, 10) : 1200,
+    maxDelayMs: cfgMaxDelay ? parseInt(cfgMaxDelay.value, 10) : 2800,
+    shopDelayMs: cfgShopDelay ? parseInt(cfgShopDelay.value, 10) : 3000
+  };
+
+  try {
+    await fetch('/api/system/antiban', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(antibanPayload)
+    });
+  } catch (e) {
+    console.warn('Failed to save antiban settings:', e);
+  }
+
   // Save Jev and Proxy settings to server
   const jevPayload = {
     enabled: cfgJevEnabled ? cfgJevEnabled.checked : false,
@@ -237,7 +291,7 @@ async function saveConfig() {
     });
     const result = await res.json();
     if (result.success) {
-      showToast('💾 系统管理配置已保存，Jev 与代理设置已实时生效！');
+      showToast('💾 系统管理配置已保存，拟人防封与 Jev 设置已实时生效！');
       if (cfgJevKey && keyInput) {
         cfgJevKey.value = '';
         cfgJevKey.placeholder = `已更新密钥 (${keyInput.slice(0, 4)}...${keyInput.slice(-4)})`;
