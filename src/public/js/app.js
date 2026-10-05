@@ -197,7 +197,7 @@ function switchSettingsTab(tabName) {
 
 // Restore saved settings
 async function restoreConfig() {
-  const defaultShops = 'https://wzyp.cn/shop/FT7\nhttps://wzyp.cn/shop/G062JE24';
+  const defaultShops = 'https://wzyp.cn/shop/FT7\nhttps://wzyp.cn/shop/G062JE24\nhttps://wzyp.cn/shop/GV0HQ2C0';
   const savedShops = localStorage.getItem('scraper_target_shops') || defaultShops;
   const savedCookie = localStorage.getItem('scraper_waf_cookie') || '';
   if (cfgTargetShops) cfgTargetShops.value = savedShops;

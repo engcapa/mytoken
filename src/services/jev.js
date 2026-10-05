@@ -433,9 +433,17 @@ export class JevService {
       });
     }
 
+    // Also perform per-product title + description classification
+    let productUpdated = 0;
+    if (typeof shopService.classifyAllProducts === 'function') {
+      productUpdated = shopService.classifyAllProducts();
+      console.log(`[Harmonization] Completed per-product classification for ${productUpdated} items.`);
+    }
+
     return {
       totalCategories: distinctCategories.length,
       updatedCount,
+      productUpdated,
       mappings: results
     };
   }
@@ -445,29 +453,147 @@ export class JevService {
  * Standard Canonical Categories for AI Token & Digital Goods
  */
 export const DEFAULT_CANONICAL_CATEGORIES = {
-  'ChatGPT / OpenAI': 'ChatGPT Plus、OpenAI账号、GPT-4o、G Plus、Plus代充、Team团队会员、K12等OpenAI官方账户与订阅',
-  'Anthropic Claude': 'Claude 3.5、Sonnet、Opus、Claude Pro、Team、速刷号及相关成品号与充值 (含同分类下的Grok)',
-  'Google Gemini': '谷歌Gemini、Gemini 1.5 Pro、Gemini Advanced、Google One 2TB/5TB、反重力Pro成品号与谷歌账户',
-  'API 中转与算力': '大模型中转站、API Key、Token额度、OneAPI、NewAPI、DeepSeek等算力与中转兑换',
-  '手机接码与验证': '手机接码、接马、Codex接马/接码、短信验证码、海外实体手机卡代收验证码',
-  '邮箱与账号体系': 'Gmail邮箱、Outlook、Hotmail、微软邮箱、苹果ID及基础账号',
-  'AI 工具与多媒体': 'Grok、X Premium、Midjourney、Suno音乐、Cursor、多媒体与独立模型',
-  '网络与综合服务': '节点加速、虚拟信用卡、工具卡密、综合杂项'
+  'OpenAI': 'ChatGPT、GPT-4o、OpenAI账号、G Plus、Plus充值、Team团队号、Codex、Free账号等OpenAI官方体系',
+  'Google': 'Gemini、Gemini Pro、Gemini Advanced、Google One 2TB、反重力、谷歌老邮箱与官方账户服务',
+  'Grok (x.ai)': 'Grok 2、x.ai、X Premium会员、Twitter Premium、gro充值与成品号',
+  'Anthropic': 'Claude 3.5 Sonnet、Opus、Claude Pro、Claude Team、Claude速刷/5X/20X与Anthropic账户体系',
+  'Kiro (AWS)': 'Kiro、AWS账户、Amazon Bedrock、AWS配额与亚马逊云端算力服务',
+  '手机接码': '手机接码、接马、短信验证码、一次性API验证码、长效/短效手机接马、实体卡代收',
+  '虚拟信用卡': '虚拟信用卡、VISA卡、Mastercard、万事达、开卡激活、VCC与海外支付卡',
+  '国产模型': 'DeepSeek、智谱GLM、通义千问Qwen、文心一言、Kimi月之暗面、MiniMax、混元、豆包等国产模型服务',
+  'API 中转与算力': '大模型API中转、1刀/10刀/20刀额度卡、OneAPI/NewAPI、混合算力兑换',
+  'AI 编程与工具': 'Cursor、GitHub Copilot、Windsurf、Midjourney、Runway、Suno、Perplexity、Capcut等编程与AI工具',
+  '邮箱与社交账号': 'Outlook、Hotmail、微软邮箱、iCloud、Apple ID、教育邮箱、Telegram、TikTok、WhatsApp、FB账号',
+  '网络与综合服务': '节点加速、梯子、工具卡密、综合教程与相关外围配套服务'
 };
+
+/**
+ * High-precision product classifier based on title + description + raw category
+ */
+export function identifyProductCategory({ title = '', description = '', category = '', shopCode = '' } = {}) {
+  const cleanTitle = (title || '').toLowerCase();
+  const cleanCategory = (category || '').toLowerCase();
+  const primaryText = `${cleanTitle} ${cleanCategory}`;
+  // Limit description to prevent irrelevant matching from lengthy tutorial text
+  const fullText = `${cleanTitle} ${cleanCategory} ${(description || '').slice(0, 300).toLowerCase()}`;
+
+  function matchRules(text) {
+    // 1. 虚拟信用卡 (VISA, Mastercard, VCC, 485954)
+    if (
+      /虚拟卡|虚拟信用卡|信用卡|visa|mastercard|万事达|vcc|485954|556150|428837/.test(text) &&
+      !/支持visa|支持信用卡|visa支付|非信用卡/.test(text) &&
+      !/figma/.test(cleanTitle) &&
+      !/g plus|g pro|openai/.test(cleanTitle)
+    ) {
+      return '虚拟信用卡';
+    }
+
+    // Dedicated SMS categories
+    const isSmsCategory = /短效手机接马|长效手机接马|手机接马|手机接码|codex 接马|codex手机接马/.test(cleanCategory);
+
+    // Is this an account where '接马' is merely a status flag?
+    const isAccountDesc = (
+      /未接马|未接码|免接马|免接码|已接马|已接码/.test(text) &&
+      /账号|成品|free号|free|plus|team|rt|反代|质保|账密|代发|格式发货|非分裂|老号|月卡|独享/.test(text) &&
+      !/单次|一次性|换号|代收|代接|长效接|短效接|接码服务|接马服务|接验证码|包接|来码|卡密|实卡/.test(text)
+    ) || cleanCategory.includes('已接马可反代');
+
+    // 2. 手机接码 (SMS Verification, even for Claude/Codex/Google)
+    if (
+      (isSmsCategory && !/反代专用|成品号/.test(cleanTitle)) ||
+      (!isAccountDesc && /单次接马|一次性接马|长效接马|短效接马|单次接码|一次性接码|代收验证码|短信验证|一次性api验证码|手机接马|手机接码|接马服务|接码服务|接验证码|自助换号|包接马|包来码|实体号池|接ma|验证码卡密/.test(text))
+    ) {
+      return '手机接码';
+    }
+
+    // 3. Kiro (AWS)
+    if (/(?:^|[^a-zA-Z])kiro(?:[^a-zA-Z]|$)|aws|amazon|bedrock|亚马逊|aws8v|aws32v/.test(text)) {
+      return 'Kiro (AWS)';
+    }
+
+    // 4. Grok (x.ai)
+    if (/grok|g\.rok|gro k|x\.ai|xai|x premium|twitter premium|gro 充值|gro 成品|gro普号|gr0k|x平台会员/.test(text)) {
+      return 'Grok (x.ai)';
+    }
+
+    // 5. Anthropic (Claude)
+    if (/claude|anthropic|sonnet|opus|haiku|claude pro|claude team|claude速刷|claude 5x|claude 20x|claude普号|claude k12|克劳德/.test(text)) {
+      return 'Anthropic';
+    }
+
+    // 6. 国产模型 (DeepSeek, 智谱GLM, 通义千问, 文心, Kimi, 混元, 豆包, MiniMax等)
+    // Only match when title or category explicitly mentions domestic model
+    if (
+      /deepseek|智谱|glm|智铺|通义千问|qwen|文心一言|文心|kimi|月之暗面|moonshot|混元|hunyuan|豆包|doubao|minimax|阶跃星辰|stepfun|百川|baichuan|商汤|日日新/.test(cleanTitle) ||
+      /deepseek|智谱|国产模型/.test(cleanCategory)
+    ) {
+      return '国产模型';
+    }
+
+    // 7. OpenAI (Priority over pure Google/email when title indicates OpenAI Team/Plus/GPT/Codex)
+    const isOpenAiAccount = (
+      /openai|chatgpt|gpt-4|gpt-3|gpt4|gpt3|gpt|gp t|g plus|plus|codex|o1-preview|o1-mini|o3|sora|2fa|首车|新车|炸车|rt有帐密|team|g free|free账号|free成品|g皮踢|已接马|未接马/.test(text) ||
+      /g plus|openai free|gp t-free账号|g free|team 5x/.test(cleanCategory) ||
+      isAccountDesc
+    );
+    if (isOpenAiAccount) {
+      return 'OpenAI';
+    }
+
+    // 8. Google (Gemini, Google One, Google accounts)
+    if (/gemini|谷歌|google|google one|gdrive|反重力|google老邮箱|谷歌老邮箱|谷歌邮箱|k12谷歌/.test(text)) {
+      return 'Google';
+    }
+
+    // 9. API 中转与算力 (纯中转站、1刀额度卡等)
+    if (/中转|中转站|oneapi|newapi|额度卡|api额度|算力|1刀|10刀|20刀/.test(text)) {
+      return 'API 中转与算力';
+    }
+
+    // 10. AI 编程与工具 (Cursor, Copilot, Midjourney, Perplexity, Automation, etc.)
+    if (
+      /cursor|copilot|windsurf|midjourney|suno|runway|luma|kling|快手|capcut|剪映|perplexity|figma|视频ai|绘画|ai写作/.test(text) ||
+      /自动化|助手|采集|多开|工具卡密/.test(text)
+    ) {
+      return 'AI 编程与工具';
+    }
+
+    // 11. 邮箱与社交账号 (Outlook, Hotmail, iCloud, Apple ID, TG, WhatsApp, Ins, etc.)
+    if (/邮箱|mail|outlook|hotmail|icloud|apple id|苹果id|教育邮箱|edu|tg号|telegram|tiktok|whatsapp|领英|facebook|推特|x账号/.test(text)) {
+      return '邮箱与社交账号';
+    }
+
+    return null;
+  }
+
+  // 1. High confidence: evaluate Title + Raw Category first
+  const primaryResult = matchRules(primaryText);
+  if (primaryResult) return primaryResult;
+
+  // 2. Secondary fallback: evaluate Description
+  const fullResult = matchRules(fullText);
+  if (fullResult) return fullResult;
+
+  // 3. Fallback
+  return '网络与综合服务';
+}
 
 /**
  * Heuristic fallback categorizer
  */
 export function heuristicCategorize(rawCategory = '', sampleTitles = []) {
-  const combined = (rawCategory + ' ' + sampleTitles.join(' ')).toLowerCase();
-  if (/gpt|chatgpt|openai|g plus|plus|k12|team/.test(combined)) return 'ChatGPT / OpenAI';
-  if (/claude|sonnet|opus|anthropic/.test(combined)) return 'Anthropic Claude';
-  if (/gemini|谷歌|google|one 2t/.test(combined)) return 'Google Gemini';
-  if (/中转|api|token|算力|deepseek|glm|key/.test(combined)) return 'API 中转与算力';
-  if (/接码|接马|短信|手机号|sim/.test(combined)) return '手机接码与验证';
-  if (/邮箱|mail|gmail|outlook|hotmail|apple id|苹果/.test(combined)) return '邮箱与账号体系';
-  if (/grok|midjourney|suno|cursor|video|视频|绘画/.test(combined)) return 'AI 工具与多媒体';
-  return '网络与综合服务';
+  if (sampleTitles.length > 0) {
+    const votes = {};
+    for (const title of sampleTitles) {
+      const cat = identifyProductCategory({ title, category: rawCategory });
+      votes[cat] = (votes[cat] || 0) + 1;
+    }
+    const sorted = Object.entries(votes).sort((a, b) => b[1] - a[1]);
+    if (sorted.length > 0) {
+      return sorted[0][0];
+    }
+  }
+  return identifyProductCategory({ title: '', category: rawCategory });
 }
 
 export const jevService = new JevService();

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import config from '../config/index.js';
+import { identifyProductCategory, heuristicCategorize } from './jev.js';
 
 // Ensure data folder exists
 const dbDir = path.dirname(config.databasePath);
@@ -194,13 +195,15 @@ export const shopService = {
     const shopCode = shop.shopCode || '';
     const rawCategory = shop.category || 'General';
 
-    // Auto resolve canonical category if not explicitly passed
+    // Auto resolve canonical category per product based on title + description + category
     let canonicalCategory = shop.canonicalCategory || '';
-    if (!canonicalCategory && shopCode && rawCategory) {
-      const mapping = this.getCategoryMapping(shopCode, rawCategory);
-      if (mapping) {
-        canonicalCategory = mapping.canonical_category;
-      }
+    if (!canonicalCategory) {
+      canonicalCategory = identifyProductCategory({
+        title: shop.title || '',
+        description: shop.description || '',
+        category: rawCategory,
+        shopCode
+      });
     }
 
     const stmt = db.prepare(`
@@ -335,6 +338,49 @@ export const shopService = {
     `);
     const info = updateStmt.run(canonicalCategory, shopCode, rawCategory);
     return info.changes;
+  },
+
+  /**
+   * Reclassify all products in database by their title + description + category
+   */
+  classifyAllProducts() {
+    const products = db.prepare('SELECT id, title, description, category, shop_code FROM shops').all();
+    const updateStmt = db.prepare('UPDATE shops SET canonical_category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+    let updated = 0;
+
+    db.exec('BEGIN TRANSACTION');
+    try {
+      for (const p of products) {
+        const canonical = identifyProductCategory({
+          title: p.title || '',
+          description: p.description || '',
+          category: p.category || '',
+          shopCode: p.shop_code || ''
+        });
+        updateStmt.run(canonical, p.id);
+        updated++;
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+
+    // Refresh category_mappings table based on majority vote per raw category
+    const distinctCats = this.getDistinctShopCategories();
+    for (const c of distinctCats) {
+      const sampleTitles = this.getCategorySampleTitles(c.shop_code, c.raw_category, 5).map(r => r.title);
+      const cat = heuristicCategorize(c.raw_category, sampleTitles);
+      db.prepare(`
+        INSERT INTO category_mappings (shop_code, raw_category, canonical_category, confidence, source, updated_at)
+        VALUES (?, ?, ?, 1.0, 'smart_rule', CURRENT_TIMESTAMP)
+        ON CONFLICT(shop_code, raw_category) DO UPDATE SET
+          canonical_category = excluded.canonical_category,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(c.shop_code, c.raw_category, cat);
+    }
+
+    return updated;
   },
 
   getCategorySampleTitles(shopCode, rawCategory, limit = 8) {
