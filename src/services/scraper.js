@@ -37,9 +37,28 @@ export function extractShopCode(urlStr = '') {
 }
 
 /**
+ * Strip HTML tags and normalize whitespace
+ */
+export function stripHtml(html = '') {
+  if (!html) return '';
+  return String(html)
+    .replace(/<br\s*[\/]?>/gi, ' ')
+    .replace(/<\/p>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Extract numeric price for accurate sorting (e.g. "¥ 145.00 起" -> 145)
  */
 export function parseNumericPrice(priceStr = '') {
+  if (typeof priceStr === 'number') return priceStr;
   if (!priceStr) return 0;
   const match = String(priceStr).replace(/,/g, '').match(/\d+(\.\d+)?/);
   return match ? parseFloat(match[0]) : 0;
@@ -102,6 +121,138 @@ export class ScraperService {
   }
 
   /**
+   * Directly fetch shop data from wzyp.cn internal JSON APIs
+   * Bypasses client-side rendering differences across varying shop themes
+   */
+  async fetchShopViaApi(shopCode, customCookie = '') {
+    if (!shopCode) return { success: false, items: [], message: 'No shop code' };
+
+    const cookie = customCookie || this.cookie;
+    const headers = {
+      'User-Agent': this.userAgent,
+      'Content-Type': 'application/json',
+      'Referer': `https://wzyp.cn/shop/${shopCode}`,
+      'Accept': 'application/json, text/plain, */*'
+    };
+    if (cookie) headers['Cookie'] = cookie;
+
+    // 1. Fetch category list
+    let catData;
+    try {
+      const catRes = await axios.post(
+        'https://wzyp.cn/shopApi/Shop/categoryList',
+        { token: shopCode, goods_type: 'card', category_key: '' },
+        { headers, timeout: 15000, validateStatus: () => true }
+      );
+
+      if (catRes.status >= 400 || !catRes.data || catRes.data.code !== 1) {
+        return {
+          success: false,
+          wafBlocked: catRes.status === 403 || this.isWafChallenge(typeof catRes.data === 'string' ? catRes.data : ''),
+          items: [],
+          message: `Category API response failed with code: ${catRes.data?.code || catRes.status}`
+        };
+      }
+      catData = catRes.data.data || [];
+    } catch (err) {
+      return { success: false, items: [], message: `Category API request error: ${err.message}` };
+    }
+
+    if (!Array.isArray(catData) || catData.length === 0) {
+      return { success: false, items: [], message: 'No categories returned by shopApi' };
+    }
+
+    // 2. Fetch products for each category in controlled concurrent batches
+    const allItems = [];
+    const concurrency = 4;
+
+    for (let i = 0; i < catData.length; i += concurrency) {
+      const chunk = catData.slice(i, i + concurrency);
+      const chunkPromises = chunk.map(async (cat) => {
+        try {
+          let currentPage = 1;
+          let hasMore = true;
+
+          while (hasMore) {
+            const goodsRes = await axios.post(
+              'https://wzyp.cn/shopApi/Shop/goodsList',
+              {
+                token: shopCode,
+                keywords: '',
+                category_id: cat.id,
+                goods_type: 'card',
+                current: currentPage,
+                pageSize: 100
+              },
+              { headers, timeout: 15000, validateStatus: () => true }
+            );
+
+            if (goodsRes.status !== 200 || !goodsRes.data?.data?.list) {
+              break;
+            }
+
+            const list = goodsRes.data.data.list || [];
+            const total = goodsRes.data.data.total || list.length;
+
+            for (const g of list) {
+              const goodsKey = g.goods_key || '';
+              const directLink = g.link || (goodsKey ? `https://wzyp.cn/item/${goodsKey}` : `https://wzyp.cn/shop/${shopCode}`);
+              const stockCount = g.extend?.stock_count;
+              const inStock = stockCount !== undefined ? (stockCount > 0 ? 1 : 0) : 1;
+              const stockText = stockCount !== undefined ? (stockCount > 0 ? `剩余${stockCount}件` : '缺货') : '有货';
+              const priceNum = typeof g.price === 'number' ? g.price : parseNumericPrice(g.price);
+              const cleanDesc = stripHtml(g.description || '');
+
+              allItems.push({
+                externalId: goodsKey ? `wzyp_${goodsKey}` : `wzyp_${shopCode}_${cat.id}_${encodeURIComponent(g.name || '')}`,
+                title: g.name || '未命名商品',
+                category: cat.name || g.category?.name || '综合专区',
+                description: cleanDesc,
+                price: g.price !== undefined ? `¥ ${g.price}` : '',
+                priceNum,
+                inStock,
+                stockText,
+                shopCode,
+                contact: g.user?.nickname || `小铺 ${shopCode}`,
+                address: `https://wzyp.cn/shop/${shopCode}`,
+                sourceUrl: directLink, // Specific product detail link (https://wzyp.cn/item/{goods_key})
+                images: g.image ? [g.image] : [],
+                rawData: {
+                  goods_key: goodsKey,
+                  market_price: g.market_price,
+                  stock_count: stockCount,
+                  category_id: cat.id,
+                  extractedAt: new Date().toISOString()
+                }
+              });
+            }
+
+            if (currentPage * 100 >= total || list.length === 0) {
+              hasMore = false;
+            } else {
+              currentPage++;
+            }
+          }
+        } catch (catErr) {
+          console.warn(`[Scraper] Failed to fetch goods for category [${cat.name}] in shop [${shopCode}]:`, catErr.message);
+        }
+      });
+
+      await Promise.all(chunkPromises);
+      // Brief pause between chunks to be respectful to server
+      if (i + concurrency < catData.length) {
+        await new Promise(r => setTimeout(r, 120));
+      }
+    }
+
+    return {
+      success: allItems.length > 0,
+      items: allItems,
+      categoriesCount: catData.length
+    };
+  }
+
+  /**
    * Perform HTTP fetch with browser-like headers
    */
   async fetchHtml(url, customCookie = '') {
@@ -142,12 +293,13 @@ export class ScraperService {
       html.includes('滑动验证页面') ||
       html.includes('CF_APP_WAF') ||
       html.includes('阿里云ESA') ||
-      html.includes('aliyunCaptcha')
+      html.includes('aliyunCaptcha') ||
+      html.includes('Denied by http_bot_simple')
     );
   }
 
   /**
-   * Parse HTML content into structured shop / goods records
+   * Resilient DOM Parser supporting multiple shop themes and layouts
    */
   parseShops(html, baseUrl) {
     const $ = cheerio.load(html);
@@ -155,13 +307,14 @@ export class ScraperService {
     const shopCode = extractShopCode(baseUrl);
 
     // Extract shop-level info
-    const shopHeaderTitle = $('.shop-name, .shop-title, h1, .header-title, .navbar-brand').first().text().trim() ||
+    const shopHeaderTitle = $('.shop-name, .shop-title, h1, .header-title, .navbar-brand, .user_name').first().text().trim() ||
                             (shopCode ? `小铺 ${shopCode}` : 'wzyp小铺');
     const shopNotice = $('.notice, .announcement, .bulletin, .alert, .shop-desc').first().text().trim();
     const shopContact = $('.contact, .qq, .wechat, .phone, .service-contact').first().text().trim();
 
-    // Check for goods items, table rows, cards
+    // Check across diverse shop themes for goods containers
     const selectors = [
+      '.goods_item',
       '.goods-item',
       '.goods-card',
       '.product-item',
@@ -173,9 +326,11 @@ export class ScraperService {
       '.store-item',
       '.item-card',
       '.list-item',
-      'table tbody tr',
-      'article',
-      '.card'
+      '.arco-card',
+      '.arco-list-item',
+      '[class*="goods_item"]',
+      '[class*="goods-item"]',
+      'table tbody tr'
     ];
 
     let foundItems = null;
@@ -190,17 +345,33 @@ export class ScraperService {
     if (foundItems && foundItems.elements.length > 0) {
       foundItems.elements.each((index, el) => {
         const item = $(el);
-        const title = item.find('h1, h2, h3, h4, .title, .name, .goods-name, .goods-title, td.name, td.title').first().text().trim() ||
+        const title = item.find('h1, h2, h3, h4, .title, .name, .goods-name, .goods-title, .goods_name, td.name, td.title').first().text().trim() ||
                       item.find('a').first().text().trim();
         if (!title || title.length < 2) return;
 
-        const link = item.find('a').attr('href') || '';
-        const fullUrl = link ? new URL(link, baseUrl).href : baseUrl;
-        const img = item.find('img').first().attr('src') || '';
-        const fullImg = img ? new URL(img, baseUrl).href : '';
+        // Resolve direct product item link: prioritize /item/{goods_key}
+        let directItemUrl = '';
+        const itemKey = item.attr('data-goods-key') || item.attr('data-key') || item.attr('data-id');
+        if (itemKey && /^[a-zA-Z0-9_-]{4,20}$/.test(itemKey)) {
+          directItemUrl = `https://wzyp.cn/item/${itemKey}`;
+        }
 
-        const desc = item.find('.desc, .description, .intro, .detail, p, td.desc').first().text().trim() || shopNotice;
-        const price = item.find('.price, .cost, .tag-price, .goods-price, td.price').first().text().trim();
+        if (!directItemUrl) {
+          const itemHref = item.find('a[href*="/item/"]').first().attr('href') ||
+                           item.find('a').first().attr('href') || '';
+          if (itemHref) {
+            try {
+              directItemUrl = new URL(itemHref, baseUrl).href;
+            } catch {}
+          }
+        }
+
+        const fullUrl = directItemUrl || baseUrl;
+        const img = item.find('img').first().attr('src') || '';
+        const fullImg = img ? (img.startsWith('http') ? img : new URL(img, baseUrl).href) : '';
+
+        const desc = stripHtml(item.find('.desc, .description, .intro, .detail, p, td.desc').first().text().trim() || shopNotice);
+        const price = item.find('.nowPrice, .price, .cost, .tag-price, .goods-price, td.price').first().text().trim();
         const priceNum = parseNumericPrice(price);
 
         const category = item.find('.category, .tag, .badge, .van-tag, td.category').first().text().trim() ||
@@ -212,8 +383,13 @@ export class ScraperService {
         const rawStockText = item.find('.stock, .inventory, .badge-stock, td.stock').first().text().trim();
         const { inStock, stockText } = parseStockStatus(rawStockText, item.text());
 
+        // Construct stable externalId
+        const matchKey = fullUrl.match(/\/item\/([a-zA-Z0-9_-]+)/i);
+        const externalId = matchKey ? `wzyp_${matchKey[1]}` :
+                           (fullUrl !== baseUrl ? `${fullUrl}_${index}` : `item_${shopCode}_${index}_${encodeURIComponent(title.substring(0, 30))}`);
+
         shops.push({
-          externalId: fullUrl !== baseUrl ? `${fullUrl}_${index}` : `item_${shopCode}_${index}_${encodeURIComponent(title.substring(0, 30))}`,
+          externalId,
           title,
           category,
           description: desc,
@@ -224,7 +400,7 @@ export class ScraperService {
           shopCode,
           contact,
           address,
-          sourceUrl: fullUrl,
+          sourceUrl: fullUrl, // Direct product link!
           images: fullImg ? [fullImg] : [],
           rawData: {
             selectorUsed: foundItems.sel,
@@ -233,69 +409,268 @@ export class ScraperService {
           }
         });
       });
-    } else {
-      // Fallback: search for anchor tags
-      $('a').each((index, el) => {
-        const a = $(el);
-        const text = a.text().trim();
-        const href = a.attr('href');
-
-        if (text && text.length > 3 && text.length < 80 && href && !href.startsWith('javascript:')) {
-          try {
-            const fullUrl = new URL(href, baseUrl).href;
-            if (
-              href.includes('shop') ||
-              href.includes('item') ||
-              href.includes('goods') ||
-              href.includes('detail') ||
-              href.includes('product')
-            ) {
-              const { inStock, stockText } = parseStockStatus(a.text(), a.parent().text());
-              shops.push({
-                externalId: fullUrl,
-                title: text,
-                category: shopHeaderTitle || '综合专区',
-                description: a.attr('title') || shopNotice || '',
-                price: '',
-                priceNum: 0,
-                inStock,
-                stockText,
-                shopCode,
-                sourceUrl: fullUrl,
-                images: [],
-                rawData: {
-                  type: 'anchor_fallback',
-                  extractedAt: new Date().toISOString()
-                }
-              });
-            }
-          } catch {
-            // Ignore invalid URL
-          }
-        }
-      });
     }
 
     return shops;
   }
 
   /**
-   * Run standard HTTP scraping for a single shop URL
+   * Run browser-based extraction (headless or interactive)
+   * Automatically executes API evaluation within the authenticated page session
+   */
+  async scrapeShopViaBrowser(targetUrl, { interactive = false } = {}) {
+    const browserPath = getBrowserPath();
+    if (!browserPath) {
+      return { success: false, message: 'Chrome or Edge browser executable not found.' };
+    }
+
+    const shopCode = extractShopCode(targetUrl);
+    let browser = null;
+
+    try {
+      console.log(`[Browser Scraper] Launching ${interactive ? 'interactive' : 'headless'} browser for: ${targetUrl}`);
+      browser = await puppeteer.launch({
+        executablePath: browserPath,
+        headless: !interactive,
+        defaultViewport: null,
+        args: [
+          '--window-size=1200,800',
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled'
+        ]
+      });
+
+      const pages = await browser.pages();
+      const page = pages.length > 0 ? pages[0] : await browser.newPage();
+      await page.setUserAgent(this.userAgent);
+
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+
+      // Handle WAF challenge
+      const maxWaitMs = interactive ? 60000 : 5000;
+      const startTime = Date.now();
+      let hasChallenge = false;
+
+      while (Date.now() - startTime < maxWaitMs) {
+        const content = await page.content();
+        if (this.isWafChallenge(content)) {
+          hasChallenge = true;
+          await new Promise(r => setTimeout(r, 1000));
+        } else {
+          hasChallenge = false;
+          break;
+        }
+      }
+
+      if (hasChallenge && !interactive) {
+        await browser.close();
+        return {
+          success: false,
+          wafBlocked: true,
+          message: `[${shopCode}] 触发了滑动验证，请使用“交互验证抓取”以手动完成滑块验证。`
+        };
+      }
+
+      // Capture active cookies
+      const cookies = await page.cookies();
+      const sessionCookie = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+      if (sessionCookie) {
+        this.cookie = sessionCookie;
+      }
+
+      // Execute internal API evaluation inside the authenticated browser context
+      const apiResult = await page.evaluate(async (token) => {
+        try {
+          const catRes = await fetch('/shopApi/Shop/categoryList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, goods_type: 'card', category_key: '' })
+          }).then(r => r.json());
+
+          if (!catRes || catRes.code !== 1 || !Array.isArray(catRes.data) || catRes.data.length === 0) {
+            return { success: false, items: [] };
+          }
+
+          const items = [];
+          for (const cat of catRes.data) {
+            let pageNum = 1;
+            let more = true;
+            while (more) {
+              try {
+                const gRes = await fetch('/shopApi/Shop/goodsList', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ token, keywords: '', category_id: cat.id, goods_type: 'card', current: pageNum, pageSize: 100 })
+                }).then(r => r.json());
+
+                const list = gRes.data?.list || [];
+                const total = gRes.data?.total || list.length;
+
+                for (const g of list) {
+                  items.push({
+                    goods_key: g.goods_key,
+                    name: g.name,
+                    category_name: cat.name || g.category?.name,
+                    description: g.description,
+                    price: g.price,
+                    link: g.link,
+                    image: g.image,
+                    stock_count: g.extend?.stock_count,
+                    shop_nickname: g.user?.nickname
+                  });
+                }
+
+                if (pageNum * 100 >= total || list.length === 0) {
+                  more = false;
+                } else {
+                  pageNum++;
+                }
+              } catch (gErr) {
+                more = false;
+              }
+            }
+            await new Promise(r => setTimeout(r, 60));
+          }
+          return { success: items.length > 0, items };
+        } catch (e) {
+          return { success: false, error: e.message, items: [] };
+        }
+      }, shopCode);
+
+      let goods = [];
+      if (apiResult.success && apiResult.items.length > 0) {
+        goods = apiResult.items.map(g => {
+          const directLink = g.link || (g.goods_key ? `https://wzyp.cn/item/${g.goods_key}` : `https://wzyp.cn/shop/${shopCode}`);
+          const stockCount = g.stock_count;
+          const inStock = stockCount !== undefined ? (stockCount > 0 ? 1 : 0) : 1;
+          const stockText = stockCount !== undefined ? (stockCount > 0 ? `剩余${stockCount}件` : '缺货') : '有货';
+          const priceNum = typeof g.price === 'number' ? g.price : parseNumericPrice(g.price);
+
+          return {
+            externalId: g.goods_key ? `wzyp_${g.goods_key}` : `wzyp_${shopCode}_${encodeURIComponent(g.name || '')}`,
+            title: g.name || '未命名商品',
+            category: g.category_name || '综合专区',
+            description: stripHtml(g.description || ''),
+            price: g.price !== undefined ? `¥ ${g.price}` : '',
+            priceNum,
+            inStock,
+            stockText,
+            shopCode,
+            contact: g.shop_nickname || `小铺 ${shopCode}`,
+            address: `https://wzyp.cn/shop/${shopCode}`,
+            sourceUrl: directLink, // Specific product detail link!
+            images: g.image ? [g.image] : [],
+            rawData: {
+              goods_key: g.goods_key,
+              stock_count: stockCount,
+              extractedVia: 'browser_evaluate',
+              extractedAt: new Date().toISOString()
+            }
+          };
+        });
+      } else {
+        // Fallback: parse rendered DOM across varying themes
+        const renderedHtml = await page.content();
+        goods = this.parseShops(renderedHtml, targetUrl);
+      }
+
+      await browser.close();
+
+      return {
+        success: goods.length > 0,
+        items: goods,
+        cookie: sessionCookie
+      };
+    } catch (err) {
+      if (browser) {
+        try { await browser.close(); } catch {}
+      }
+      return { success: false, message: err.message, items: [] };
+    }
+  }
+
+  /**
+   * Run standard scraping for a single shop URL
+   * Strategy: Fast JSON API -> Fallback to Headless Browser -> Fallback to HTML DOM parser
    */
   async runSingle({ url = this.targetUrl, cookie = this.cookie } = {}) {
     const target = url || this.targetUrl;
-    try {
-      const response = await this.fetchHtml(target, cookie);
+    const shopCode = extractShopCode(target);
 
+    try {
+      // 1. First attempt: Direct High-Fidelity API extraction
+      const apiResult = await this.fetchShopViaApi(shopCode, cookie);
+      if (apiResult.success && apiResult.items.length > 0) {
+        const savedCount = shopService.upsertBatch(apiResult.items);
+        const message = `[${shopCode}] 采集成功！共提取 ${apiResult.items.length} 件商品（覆盖 ${apiResult.categoriesCount || 1} 个分类），成功入库 ${savedCount} 条。`;
+
+        logService.addLog({
+          targetUrl: target,
+          status: 'SUCCESS',
+          itemsScraped: savedCount,
+          message
+        });
+
+        return {
+          success: true,
+          wafBlocked: false,
+          message,
+          count: savedCount,
+          items: apiResult.items
+        };
+      }
+
+      // If blocked by WAF, try browser mode
+      if (apiResult.wafBlocked) {
+        console.log(`[Scraper] API blocked by WAF for ${shopCode}, attempting browser fallback...`);
+        const browserRes = await this.scrapeShopViaBrowser(target, { interactive: false });
+        if (browserRes.success && browserRes.items.length > 0) {
+          const savedCount = shopService.upsertBatch(browserRes.items);
+          const message = `[${shopCode}] 浏览器静默采集成功！提取 ${browserRes.items.length} 件商品，入库 ${savedCount} 条。`;
+          logService.addLog({
+            targetUrl: target,
+            status: 'SUCCESS',
+            itemsScraped: savedCount,
+            message
+          });
+          return {
+            success: true,
+            wafBlocked: false,
+            message,
+            count: savedCount,
+            cookie: browserRes.cookie
+          };
+        }
+
+        if (browserRes.wafBlocked) {
+          const errorMsg = `[${shopCode}] 触发了阿里云ESA滑动验证保护。请点击“交互验证抓取”以手动完成滑块。`;
+          logService.addLog({
+            targetUrl: target,
+            status: 'WAF_BLOCKED',
+            itemsScraped: 0,
+            message: errorMsg
+          });
+          return {
+            success: false,
+            wafBlocked: true,
+            canInteractive: true,
+            message: errorMsg,
+            count: 0
+          };
+        }
+      }
+
+      // 2. Fallback: Standard HTML fetch & multi-theme DOM parser
+      const response = await this.fetchHtml(target, cookie);
       if (this.isWafChallenge(response.data)) {
-        const errorMsg = `[${extractShopCode(target)}] 触发了阿里云ESA滑动验证保护 (WAF)。`;
+        const errorMsg = `[${shopCode}] 触发了滑动验证页面。请使用“交互验证抓取”。`;
         logService.addLog({
           targetUrl: target,
           status: 'WAF_BLOCKED',
           itemsScraped: 0,
           message: errorMsg
         });
-
         return {
           success: false,
           wafBlocked: true,
@@ -305,43 +680,61 @@ export class ScraperService {
         };
       }
 
-      if (response.status >= 400) {
-        const errorMsg = `[${extractShopCode(target)}] 请求失败，状态码: ${response.status}`;
+      const shops = this.parseShops(response.data, target);
+      if (shops.length > 0) {
+        const savedCount = shopService.upsertBatch(shops);
+        const message = `[${shopCode}] DOM解析成功！解析到 ${shops.length} 条商品，保存 ${savedCount} 条。`;
         logService.addLog({
           targetUrl: target,
-          status: 'FAILED',
-          itemsScraped: 0,
-          message: errorMsg
+          status: 'SUCCESS',
+          itemsScraped: savedCount,
+          message
         });
-
         return {
-          success: false,
+          success: true,
           wafBlocked: false,
-          message: errorMsg,
-          count: 0
+          message,
+          count: savedCount,
+          items: shops
         };
       }
 
-      const shops = this.parseShops(response.data, target);
-      const savedCount = shopService.upsertBatch(shops);
+      // If still 0 items, run browser once as final fallback
+      const finalBrowserRes = await this.scrapeShopViaBrowser(target, { interactive: false });
+      if (finalBrowserRes.success && finalBrowserRes.items.length > 0) {
+        const savedCount = shopService.upsertBatch(finalBrowserRes.items);
+        const message = `[${shopCode}] 抓取成功！解析到 ${finalBrowserRes.items.length} 件商品，入库 ${savedCount} 条。`;
+        logService.addLog({
+          targetUrl: target,
+          status: 'SUCCESS',
+          itemsScraped: savedCount,
+          message
+        });
+        return {
+          success: true,
+          wafBlocked: false,
+          message,
+          count: savedCount,
+          cookie: finalBrowserRes.cookie
+        };
+      }
 
-      const message = `[${extractShopCode(target)}] 抓取成功！解析到 ${shops.length} 条商品，保存 ${savedCount} 条。`;
+      const emptyMsg = `[${shopCode}] 未在小铺页面中解析到在售商品，可能需要验证或页面格式特殊。`;
       logService.addLog({
         targetUrl: target,
-        status: 'SUCCESS',
-        itemsScraped: savedCount,
-        message
+        status: 'FAILED',
+        itemsScraped: 0,
+        message: emptyMsg
       });
 
       return {
-        success: true,
+        success: false,
         wafBlocked: false,
-        message,
-        count: savedCount,
-        items: shops
+        message: emptyMsg,
+        count: 0
       };
     } catch (err) {
-      const message = `[${extractShopCode(target)}] 抓取异常: ${err.message}`;
+      const message = `[${shopCode}] 抓取异常: ${err.message}`;
       logService.addLog({
         targetUrl: target,
         status: 'FAILED',
@@ -399,101 +792,46 @@ export class ScraperService {
    */
   async runInteractive({ url, urls } = {}) {
     const targetList = this.normalizeUrlList(urls || url || this.targetUrl);
-    const browserPath = getBrowserPath();
-    if (!browserPath) {
-      return {
-        success: false,
-        message: 'No Chrome or Edge browser executable found on system.'
-      };
-    }
-
-    let browser = null;
     let totalSaved = 0;
     let lastCookie = this.cookie;
 
-    try {
-      console.log(`[Interactive Scraper] Launching desktop browser: ${browserPath}`);
-      browser = await puppeteer.launch({
-        executablePath: browserPath,
-        headless: false,
-        defaultViewport: null,
-        args: [
-          '--window-size=1200,800',
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled'
-        ]
-      });
+    for (let i = 0; i < targetList.length; i++) {
+      const target = targetList[i];
+      const shopCode = extractShopCode(target);
+      console.log(`[Interactive Scraper] [${i + 1}/${targetList.length}] Processing shop: ${target}`);
 
-      const pages = await browser.pages();
-      const page = pages.length > 0 ? pages[0] : await browser.newPage();
-      await page.setUserAgent(this.userAgent);
-
-      for (let i = 0; i < targetList.length; i++) {
-        const target = targetList[i];
-        console.log(`[Interactive Scraper] [${i + 1}/${targetList.length}] Visiting: ${target}`);
-        await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 35000 });
-
-        // Wait for user to pass captcha if challenged
-        const maxWaitMs = 60000;
-        const startTime = Date.now();
-        let solved = false;
-
-        while (Date.now() - startTime < maxWaitMs) {
-          const content = await page.content();
-          if (!this.isWafChallenge(content)) {
-            solved = true;
-            break;
-          }
-          await new Promise(r => setTimeout(r, 1000));
-        }
-
-        if (!solved) {
-          console.warn(`[Interactive Scraper] Timeout waiting for verification on ${target}`);
-          continue;
-        }
-
-        await new Promise(r => setTimeout(r, 2000));
-
-        // Capture session cookie
-        const cookies = await page.cookies();
-        lastCookie = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-        if (lastCookie) {
+      const browserRes = await this.scrapeShopViaBrowser(target, { interactive: true });
+      if (browserRes.success && browserRes.items.length > 0) {
+        const saved = shopService.upsertBatch(browserRes.items);
+        totalSaved += saved;
+        if (browserRes.cookie) {
+          lastCookie = browserRes.cookie;
           this.cookie = lastCookie;
         }
-
-        const renderedHtml = await page.content();
-        const shops = this.parseShops(renderedHtml, target);
-        const saved = shopService.upsertBatch(shops);
-        totalSaved += saved;
 
         logService.addLog({
           targetUrl: target,
           status: 'SUCCESS',
           itemsScraped: saved,
-          message: `[${extractShopCode(target)}] 交互抓取入库 ${saved} 件商品`
+          message: `[${shopCode}] 交互式抓取成功！共提取 ${browserRes.items.length} 件商品，入库 ${saved} 条。`
+        });
+      } else {
+        logService.addLog({
+          targetUrl: target,
+          status: 'FAILED',
+          itemsScraped: 0,
+          message: `[${shopCode}] 交互抓取未能提取到商品: ${browserRes.message || '未知原因'}`
         });
       }
-
-      await browser.close();
-
-      const message = `多小铺交互式抓取完成！共入库 ${totalSaved} 件商品，并捕获最新 Cookie 凭证。`;
-      return {
-        success: true,
-        message,
-        count: totalSaved,
-        cookie: lastCookie
-      };
-    } catch (err) {
-      if (browser) {
-        try { await browser.close(); } catch {}
-      }
-      return {
-        success: false,
-        message: `Interactive scrape error: ${err.message}`,
-        count: totalSaved
-      };
     }
+
+    const message = `多小铺交互抓取完成！共处理 ${targetList.length} 个小铺，入库 ${totalSaved} 件商品。`;
+    return {
+      success: totalSaved > 0,
+      message,
+      count: totalSaved,
+      cookie: lastCookie
+    };
   }
 
   /**
@@ -522,14 +860,56 @@ export class ScraperService {
   }
 
   /**
-   * Seed realistic sample products based on the exact live FT7 shop screenshot
+   * Seed realistic sample products based on actual FT7 and G062JE24 shop items
+   * All items link to their specific product detail page (/item/{goods_key})
    */
   static seedSampleData() {
     const samples = [
       // ==========================================
-      // FT7 小铺 - G Plus 分类真实商品 (基于截图真实数据)
+      // FT7 小铺 - G Plus 分类真实商品
       // ==========================================
-      // 【有货商品 - 按价格从低到高】
+      {
+        externalId: 'wzyp_rmvq91',
+        shopCode: 'FT7',
+        title: '【官方充值】Codex AI Plus [菲区] CDK 质保订阅30天',
+        category: 'G Plus',
+        description: '官方正规充值CDK卡密，支持24小时全自动提卡兑换，质保30天完整订阅周期。',
+        price: '¥ 127.00',
+        priceNum: 127.0,
+        inStock: 1,
+        stockText: '剩余100件',
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/rmvq91'
+      },
+      {
+        externalId: 'wzyp_4bahii',
+        shopCode: 'FT7',
+        title: '【官方充值】菲区G plus cdk24小时（质保30天）正规充值',
+        category: 'G Plus',
+        description: '菲区专用官方直充兑换卡密，即买即充，无延迟，质保30天。',
+        price: '¥ 132.00',
+        priceNum: 132.0,
+        inStock: 1,
+        stockText: '剩余519件',
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/4bahii'
+      },
+      {
+        externalId: 'wzyp_bojjp1',
+        shopCode: 'FT7',
+        title: 'Plus已接马【仅反代发货Json】不能网页端',
+        category: 'G Plus',
+        description: '仅供反代程序配置Json使用，不支持网页端直接访问，极速自动发货。',
+        price: '¥ 22.75',
+        priceNum: 22.75,
+        inStock: 1,
+        stockText: '剩余25件',
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/bojjp1'
+      },
       {
         externalId: 'wzyp_FT7_GP_001',
         shopCode: 'FT7',
@@ -540,79 +920,9 @@ export class ScraperService {
         priceNum: 22.5,
         inStock: 1,
         stockText: '库存充足',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_002',
-        shopCode: 'FT7',
-        title: 'Plus已接马【仅反代发货Json】不能网页端',
-        category: 'G Plus',
-        description: '仅供反代程序配置Json使用，不支持网页端直接访问，极速自动发货。',
-        price: '¥ 22.75',
-        priceNum: 22.75,
-        inStock: 1,
-        stockText: '库存充足',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_003',
-        shopCode: 'FT7',
-        title: '已接马Plus不带账密【仅反代使用】401可找回有RT',
-        category: 'G Plus',
-        description: '带RefreshToken，若出现401认证异常可联系找回，专供API中转与反代。',
-        price: '¥ 23.95',
-        priceNum: 23.95,
-        inStock: 1,
-        stockText: '库存充足',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_004',
-        shopCode: 'FT7',
-        title: 'plus成品【域名邮箱】未接马 质保首登',
-        category: 'G Plus',
-        description: '绑定独立自定义域名邮箱，一手纯净未接码，质保首次成功登录。',
-        price: '¥ 28.54',
-        priceNum: 28.54,
-        inStock: 1,
-        stockText: '库存一般',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_005',
-        shopCode: 'FT7',
-        title: '未接马 Plus成品号 纯手工产出 质保首登 部分带重置',
-        category: 'G Plus',
-        description: '纯手工纯净环境产出，未接码成品账号，质保首登，部分批次带重置密保。',
-        price: '¥ 30.02',
-        priceNum: 30.02,
-        inStock: 1,
-        stockText: '库存少量',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_006',
-        shopCode: 'FT7',
-        title: 'PLUS未接马 成品号 质保首登',
-        category: 'G Plus',
-        description: '现成Plus成品独享号，未接码，质保首次登录。',
-        price: '¥ 32.50',
-        priceNum: 32.5,
-        inStock: 1,
-        stockText: '库存少量',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/FT7_GP_001'
       },
       {
         externalId: 'wzyp_FT7_GP_007',
@@ -624,65 +934,9 @@ export class ScraperService {
         priceNum: 36.18,
         inStock: 1,
         stockText: '剩余18件',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_008',
-        shopCode: 'FT7',
-        title: '【质保3h首登】plus会员iCloud或者域名邮箱新开的各种渠道',
-        category: 'G Plus',
-        description: '新开iCloud/优质域名邮箱渠道，3小时首登无忧售后保障。',
-        price: '¥ 36.30',
-        priceNum: 36.3,
-        inStock: 1,
-        stockText: '剩余3件',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_009',
-        shopCode: 'FT7',
-        title: 'Plus丨已接马丨带2-3次重置',
-        category: 'G Plus',
-        description: '高权重账号，带2到3次重置密保卡，长期使用更稳定。',
-        price: '¥ 41.80',
-        priceNum: 41.8,
-        inStock: 1,
-        stockText: '库存充足',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_010',
-        shopCode: 'FT7',
-        title: 'Plus成品号 未接马 质保首登 (高级独享)',
-        category: 'G Plus',
-        description: '独享高级成品号，未接马，质保首次登录。',
-        price: '¥ 47.13',
-        priceNum: 47.13,
-        inStock: 1,
-        stockText: '库存少量',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_011',
-        shopCode: 'FT7',
-        title: 'iCloud邮箱|PLUS成品号已刷满额度+1张重置卡|还剩4天',
-        category: 'G Plus',
-        description: 'iCloud原生邮箱，已刷满使用额度，附带1张重置卡，剩余订阅有效期4天。',
-        price: '¥ 60.74',
-        priceNum: 60.74,
-        inStock: 1,
-        stockText: '剩余1件',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/FT7_GP_007'
       },
       {
         externalId: 'wzyp_FT7_GP_012',
@@ -694,101 +948,14 @@ export class ScraperService {
         priceNum: 71.9,
         inStock: 1,
         stockText: '库存一般',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_013',
-        shopCode: 'FT7',
-        title: '域名邮箱PLUS成品号已刷|已活4天',
-        category: 'G Plus',
-        description: '域名邮箱注册，已安全度过前4天风控期。',
-        price: '¥ 76.76',
-        priceNum: 76.76,
-        inStock: 1,
-        stockText: '剩余2件',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_014',
-        shopCode: 'FT7',
-        title: '【官方充值】Codex AI Plus 全自动24小时自动充值CDK',
-        category: 'G Plus',
-        description: '全自动24小时卡密自动充值兑换，官方正规渠道。',
-        price: '¥ 127.00',
-        priceNum: 127.0,
-        inStock: 1,
-        stockText: '库存充足',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_015',
-        shopCode: 'FT7',
-        title: '【官方充值】非区G plus cdk24小时自动充值',
-        category: 'G Plus',
-        description: '非区专用官方直充兑换卡密，即买即充，无延迟。',
-        price: '¥ 132.00',
-        priceNum: 132.0,
-        inStock: 1,
-        stockText: '库存充足',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-
-      // 【截图中展示的部分缺货商品 - 供缺货过滤对比测试】
-      {
-        externalId: 'wzyp_FT7_GP_016_oos',
-        shopCode: 'FT7',
-        title: '【无质保】G plus U端 未接马',
-        category: 'G Plus',
-        description: '低价走量款，无质保首登，当前批次已售罄。',
-        price: '¥ 11.39',
-        priceNum: 11.39,
-        inStock: 0,
-        stockText: '缺货',
-        contact: 'TG: https://t.me/ft7tz',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_017_oos',
-        shopCode: 'FT7',
-        title: '新日期Plus成品 质保首登 momo渠道',
-        category: 'G Plus',
-        description: '本周momo渠道热销已抢空。',
-        price: '¥ 14.00',
-        priceNum: 14.0,
-        inStock: 0,
-        stockText: '缺货',
-        contact: 'TG: https://t.me/ft7tz',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_GP_018_oos',
-        shopCode: 'FT7',
-        title: 'G Plus月卡 稳如老狗 放心购买 已接马',
-        category: 'G Plus',
-        description: '原价30元特价22元，目前缺货等待补卡中。',
-        price: '¥ 22.00',
-        priceNum: 22.0,
-        inStock: 0,
-        stockText: '缺货',
-        contact: 'TG: https://t.me/ft7tz',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/FT7_GP_012'
       },
 
       // ==========================================
-      // FT7 小铺 - 其他分类商品 (对应截图顶部Tabs)
+      // FT7 小铺 - 其他分类商品
       // ==========================================
-      // Claude | g.rok (共24种商品中的代表性在售商品)
       {
         externalId: 'wzyp_FT7_CL_001',
         shopCode: 'FT7',
@@ -798,10 +965,10 @@ export class ScraperService {
         price: '¥ 45.00',
         priceNum: 45.0,
         inStock: 1,
-        stockText: '库存 16',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        stockText: '剩余16件',
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/FT7_CL_001'
       },
       {
         externalId: 'wzyp_FT7_CL_002',
@@ -812,13 +979,11 @@ export class ScraperService {
         price: '¥ 145.00',
         priceNum: 145.0,
         inStock: 1,
-        stockText: '库存 8',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        stockText: '剩余8件',
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/FT7_CL_002'
       },
-
-      // 谷歌 | Gemini (共23种商品)
       {
         externalId: 'wzyp_FT7_GM_001',
         shopCode: 'FT7',
@@ -828,70 +993,126 @@ export class ScraperService {
         price: '¥ 18.50',
         priceNum: 18.5,
         inStock: 1,
-        stockText: '库存 35',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        stockText: '剩余35件',
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/FT7_GM_001'
       },
-      {
-        externalId: 'wzyp_FT7_GM_002',
-        shopCode: 'FT7',
-        title: 'Gemini Advanced 独享学生认证号 (1年期资格)',
-        category: '谷歌 | Gemini',
-        description: '长期稳定通道，附赠教育权益和高额云盘容量。',
-        price: '¥ 78.00',
-        priceNum: 78.0,
-        inStock: 1,
-        stockText: '库存 10',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-
-      // Codex 接码 (共21种商品)
       {
         externalId: 'wzyp_FT7_CX_001',
         shopCode: 'FT7',
         title: 'OpenAI 注册接码专用卡密 (一次性API验证码)',
-        category: 'Codex 接码',
+        category: 'Codex 接马',
         description: '支持注册全新ChatGPT账号，高到达率，超时自动返还。',
         price: '¥ 3.50',
         priceNum: 3.5,
         inStock: 1,
-        stockText: '库存 200',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
-      },
-      {
-        externalId: 'wzyp_FT7_CX_002',
-        shopCode: 'FT7',
-        title: '英国物理实体手机卡代接码 (一次验证有效)',
-        category: 'Codex 接码',
-        description: '英国原生实体卡，非虚拟号段，专解高风控业务绑定。',
-        price: '¥ 15.00',
-        priceNum: 15.0,
-        inStock: 1,
-        stockText: '库存 45',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        stockText: '剩余200件',
+        contact: 'FT7的小店',
+        address: 'https://wzyp.cn/shop/FT7',
+        sourceUrl: 'https://wzyp.cn/item/FT7_CX_001'
       },
 
-      // G K12 Team (共16种商品)
+      // ==========================================
+      // G062JE24 小铺 - 中转站 & 模型服务分类商品
+      // ==========================================
       {
-        externalId: 'wzyp_FT7_TM_001',
-        shopCode: 'FT7',
-        title: 'ChatGPT Team 团队工作区车位 (月付合租)',
-        category: 'G K12 Team',
-        description: '无限GPT-4o对话次数，独立对话隔离保护，企业级通道。',
-        price: '¥ 48.00',
-        priceNum: 48.0,
+        externalId: 'wzyp_mf3onp',
+        shopCode: 'G062JE24',
+        title: 'OpenAI与Claude中转1刀',
+        category: '中转站',
+        description: '1:1 额度卡，购买后前往自助兑换，额度将自动充入账户。',
+        price: '¥ 1.00',
+        priceNum: 1.0,
         inStock: 1,
-        stockText: '剩余6件',
-        contact: 'TG: https://t.me/ft7tz | QQ: 1091631176',
-        address: 'wzyp.cn/shop/FT7',
-        sourceUrl: 'https://wzyp.cn/shop/FT7'
+        stockText: '剩余20件',
+        contact: '各类低价对接汇总',
+        address: 'https://wzyp.cn/shop/G062JE24',
+        sourceUrl: 'https://wzyp.cn/item/mf3onp'
+      },
+      {
+        externalId: 'wzyp_17bfg2',
+        shopCode: 'G062JE24',
+        title: '智谱5.3最新的日卡服务',
+        category: '中转站',
+        description: '智谱GLM-5.3日卡，24h有效，500次大模型请求，支持编程套餐服务。',
+        price: '¥ 4.20',
+        priceNum: 4.2,
+        inStock: 1,
+        stockText: '剩余168件',
+        contact: '各类低价对接汇总',
+        address: 'https://wzyp.cn/shop/G062JE24',
+        sourceUrl: 'https://wzyp.cn/item/17bfg2'
+      },
+      {
+        externalId: 'wzyp_2ghl57',
+        shopCode: 'G062JE24',
+        title: 'OpenAI与Claude中转10刀',
+        category: '中转站',
+        description: '1:1 额度卡，购买后自助兑换，额度自动充入账户，体验满意再下单。',
+        price: '¥ 10.00',
+        priceNum: 10.0,
+        inStock: 1,
+        stockText: '剩余14件',
+        contact: '各类低价对接汇总',
+        address: 'https://wzyp.cn/shop/G062JE24',
+        sourceUrl: 'https://wzyp.cn/item/2ghl57'
+      },
+      {
+        externalId: 'wzyp_tbk6gz',
+        shopCode: 'G062JE24',
+        title: '智铺周卡服务',
+        category: '中转站',
+        description: '智谱GLM-5.2周卡，7天有效，3500次以上大模型请求，可接入各类编程工具。',
+        price: '¥ 24.15',
+        priceNum: 24.15,
+        inStock: 1,
+        stockText: '剩余51件',
+        contact: '各类低价对接汇总',
+        address: 'https://wzyp.cn/shop/G062JE24',
+        sourceUrl: 'https://wzyp.cn/item/tbk6gz'
+      },
+      {
+        externalId: 'wzyp_tw28ot',
+        shopCode: 'G062JE24',
+        title: 'OpenAI与Claude中转20刀',
+        category: '中转站',
+        description: '1:1 额度卡，支持ChatGPT与Claude混合调用。',
+        price: '¥ 20.00',
+        priceNum: 20.0,
+        inStock: 1,
+        stockText: '剩余11件',
+        contact: '各类低价对接汇总',
+        address: 'https://wzyp.cn/shop/G062JE24',
+        sourceUrl: 'https://wzyp.cn/item/tw28ot'
+      },
+      {
+        externalId: 'wzyp_jo14yg',
+        shopCode: 'G062JE24',
+        title: '智铺5.3月卡服务',
+        category: '中转站',
+        description: '智谱最新GLM-5.3月卡，30天有效，15000次以上大模型请求，量大管饱。',
+        price: '¥ 104.50',
+        priceNum: 104.5,
+        inStock: 1,
+        stockText: '剩余94件',
+        contact: '各类低价对接汇总',
+        address: 'https://wzyp.cn/shop/G062JE24',
+        sourceUrl: 'https://wzyp.cn/item/jo14yg'
+      },
+      {
+        externalId: 'wzyp_mf6i6w',
+        shopCode: 'G062JE24',
+        title: '国产大模型 glm5.2 API 一亿token',
+        category: '中转站',
+        description: 'GLM-5.2 输入 1亿 Token，高并发调用，支持各类智能体对接。',
+        price: '¥ 570.00',
+        priceNum: 570.0,
+        inStock: 1,
+        stockText: '剩余3件',
+        contact: '各类低价对接汇总',
+        address: 'https://wzyp.cn/shop/G062JE24',
+        sourceUrl: 'https://wzyp.cn/item/mf6i6w'
       }
     ];
 

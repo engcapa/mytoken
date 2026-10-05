@@ -105,7 +105,8 @@ function bindEvents() {
 
 // Restore saved settings
 function restoreConfig() {
-  const savedShops = localStorage.getItem('scraper_target_shops') || 'https://wzyp.cn/shop/FT7';
+  const defaultShops = 'https://wzyp.cn/shop/FT7\nhttps://wzyp.cn/shop/G062JE24';
+  const savedShops = localStorage.getItem('scraper_target_shops') || defaultShops;
   const savedCookie = localStorage.getItem('scraper_waf_cookie') || '';
   if (cfgTargetShops) cfgTargetShops.value = savedShops;
   if (cfgWafCookie) cfgWafCookie.value = savedCookie;
@@ -305,9 +306,9 @@ function renderProductsList(items) {
               <tr class="hover:bg-slate-50/80 transition-colors">
                 <!-- Title & Description -->
                 <td class="py-3 px-5 align-top">
-                  <div class="font-bold text-slate-900 text-sm hover:text-indigo-600 transition-colors">
+                  <a href="${item.source_url || '#'}" target="_blank" class="font-bold text-slate-900 text-sm hover:text-indigo-600 transition-colors inline-block leading-snug" title="在新窗口打开具体商品详情">
                     ${escapeHtml(item.title)}
-                  </div>
+                  </a>
                   ${item.description ? `
                     <div class="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
                       ${escapeHtml(item.description)}
@@ -339,18 +340,21 @@ function renderProductsList(items) {
 
                 <!-- Shop Code -->
                 <td class="py-3 px-3 align-top whitespace-nowrap">
-                  <span class="inline-block px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 font-mono">
-                    ${escapeHtml(item.shop_code || 'wzyp')}
-                  </span>
+                  <a href="https://wzyp.cn/shop/${encodeURIComponent(item.shop_code || '')}" target="_blank" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 font-mono transition-colors" title="查看小铺 ${escapeHtml(item.shop_code)} 主页">
+                    <span>🏪</span>
+                    <span>${escapeHtml(item.shop_code || 'wzyp')}</span>
+                  </a>
                 </td>
 
                 <!-- Contact & Buy Link -->
                 <td class="py-3 px-4 align-top text-xs text-slate-600 whitespace-nowrap">
                   ${item.source_url ? `
-                    <a href="${item.source_url}" target="_blank" class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md font-medium text-xs transition-colors">
-                      <span>直达小铺</span> ↗
+                    <a href="${item.source_url}" target="_blank" class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md font-medium text-xs transition-colors shadow-2xs" title="直达该商品的具体购买详情页">
+                      <span>直达商品 ↗</span>
                     </a>
-                  ` : ''}
+                  ` : `
+                    <span class="text-slate-400">暂无直达链接</span>
+                  `}
                   ${item.contact ? `
                     <div class="text-[11px] text-slate-400 mt-1 truncate max-w-[140px]" title="${escapeHtml(item.contact)}">
                       ${escapeHtml(item.contact)}
