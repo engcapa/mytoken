@@ -1,5 +1,5 @@
 {
-  "name": "wzyp-shop-scraper",
+  "name": "mytoken",
   "version": "1.0.0",
   "description": "A Node.js web app for scraping, saving, and displaying shop information from wzyp.cn and other sources",
   "type": "module",
