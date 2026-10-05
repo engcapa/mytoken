@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "scrape": "node src/scripts/scrape.js",
-    "scrape:interactive": "node src/scripts/scrape.js --interactive"
+    "scrape:interactive": "node src/scripts/scrape.js --interactive",
+    "monitor:ip": "node src/scripts/monitor_ip.js"
   },
   "keywords": [
     "crawler",

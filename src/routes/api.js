@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import config from '../config/index.js';
 import { shopService, logService } from '../services/db.js';
 import { scraperService, ScraperService } from '../services/scraper.js';
 import { jevService } from '../services/jev.js';
@@ -255,6 +258,20 @@ router.post('/jev/categories/override', (req, res) => {
       success: true,
       message: `已成功将 [${shopCode}] "${rawCategory}" 映射为 "${canonicalCategory}"，同步更新 ${updatedCount} 件商品！`
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/ip-monitor - get real-time IP unban monitor status
+router.get('/ip-monitor', (req, res) => {
+  try {
+    const statusFile = path.resolve(path.dirname(config.databasePath), 'ip_monitor.json');
+    if (!fs.existsSync(statusFile)) {
+      return res.json({ success: true, active: false, message: '监控任务未启动或尚无检测记录' });
+    }
+    const data = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
+    res.json({ success: true, active: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
